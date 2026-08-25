@@ -1,0 +1,154 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { apiHandler } from "@/lib/http/apiHandler";
+import { getRequestId, requireUser, primaryAuditRole } from "@/lib/http/requestContext";
+import { policy } from "@/lib/authz/policy";
+import { pool, withTransaction } from "@/lib/db";
+import { writeAuditEvent } from "@/lib/audit/writeAuditEvent";
+import { serializeCosting, type CostingHeaderRow } from "@/lib/costings/types";
+import { serializeCostingLine, type CostingLineRow } from "@/lib/costings/lines";
+import { AppError, Errors } from "@/lib/errors";
+
+/** Records AUD-017 (blocked mutation attempt) whenever an authorization check throws, then re-throws unchanged. */
+async function assertAuthorized(
+  check: () => void,
+  ctx: { entityId: string; actorUserId: string; actorRole: string; requestId: string; action: string },
+): Promise<void> {
+  try {
+    check();
+  } catch (err) {
+    if (err instanceof AppError) {
+      await writeAuditEvent({
+        action: "AUTHORIZATION_BLOCKED",
+        entityType: "costing_headers",
+        entityId: ctx.entityId,
+        actorUserId: ctx.actorUserId,
+        actorRole: ctx.actorRole,
+        requestId: ctx.requestId,
+        reason: `${ctx.action} blocked: ${err.code}`,
+      });
+    }
+    throw err;
+  }
+}
+
+async function loadCosting(costingId: string): Promise<CostingHeaderRow> {
+  const { rows } = await pool.query<CostingHeaderRow>(
+    `SELECT * FROM costing_headers WHERE costing_id = $1`,
+    [costingId],
+  );
+  if (rows.length === 0) throw Errors.notFound("Costing");
+  return rows[0];
+}
+
+export const GET = apiHandler(async (_req: NextRequest, ctx) => {
+  const user = await requireUser();
+  policy.canViewCosting(user);
+  const { id } = await ctx.params;
+  const costing = await loadCosting(id);
+
+  const { rows: lineRows } = await pool.query<
+    CostingLineRow & {
+      has_current_snapshot: boolean;
+      unit_selling_price: string | null;
+      order_total: string | null;
+    }
+  >(
+    `SELECT cl.*,
+            latest.has_current_snapshot,
+            latest.unit_selling_price,
+            latest.order_total
+     FROM costing_lines cl
+     LEFT JOIN LATERAL (
+       SELECT (s.created_at >= cl.updated_at) AS has_current_snapshot, s.unit_selling_price, s.order_total
+       FROM line_calculation_snapshots s
+       WHERE s.costing_line_id = cl.costing_line_id
+       ORDER BY s.created_at DESC
+       LIMIT 1
+     ) latest ON true
+     WHERE cl.costing_id = $1 AND cl.deleted_at IS NULL
+     ORDER BY cl.line_no`,
+    [id],
+  );
+
+  const lines = lineRows.map((r) => ({
+    ...serializeCostingLine(r, r.has_current_snapshot ?? false),
+    latestUnitSellingPrice: r.unit_selling_price !== null ? Number(r.unit_selling_price) : null,
+    latestOrderTotal: r.order_total !== null ? Number(r.order_total) : null,
+  }));
+
+  return NextResponse.json({ ...serializeCosting(costing, user.userId), lines });
+});
+
+const PatchCostingSchema = z.object({
+  expectedUpdatedAt: z.string(),
+  customerName: z.string().min(1).max(200).optional(),
+  validityDays: z.number().int().positive().optional(),
+});
+
+export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
+  const user = await requireUser();
+  const requestId = getRequestId(req);
+  const { id } = await ctx.params;
+
+  const body = PatchCostingSchema.safeParse(await req.json());
+  if (!body.success) {
+    throw Errors.validation("Data perubahan tidak valid.");
+  }
+
+  const before = await loadCosting(id);
+  // Ownership/state check runs before the concurrency check: an unauthorized caller
+  // must always see COSTING_READ_ONLY / COSTING_LOCKED, never a concurrency error
+  // that would leak whether their guessed expectedUpdatedAt was stale.
+  await assertAuthorized(
+    () => policy.assertCanEditCosting(user, { ownerUserId: before.owner_user_id, status: before.status }),
+    { entityId: id, actorUserId: user.userId, actorRole: primaryAuditRole(user), requestId, action: "COSTING_PATCH" },
+  );
+
+  if (new Date(body.data.expectedUpdatedAt).getTime() !== before.updated_at.getTime()) {
+    throw Errors.staleUpdate();
+  }
+
+  const nextCustomerName = body.data.customerName ?? before.customer_name_snapshot;
+  const nextValidityDays = body.data.validityDays ?? before.validity_days;
+  const changedFields: string[] = [];
+  if (nextCustomerName !== before.customer_name_snapshot) changedFields.push("customerName");
+  if (nextValidityDays !== before.validity_days) changedFields.push("validityDays");
+
+  const after = await withTransaction(async (client) => {
+    const { rows, rowCount } = await client.query<CostingHeaderRow>(
+      `UPDATE costing_headers
+         SET customer_name_snapshot = $1,
+             validity_days = $2,
+             updated_at = now()
+       WHERE costing_id = $3 AND updated_at = $4
+       RETURNING *`,
+      [nextCustomerName, nextValidityDays, id, before.updated_at],
+    );
+    if (rowCount === 0) {
+      // Lost the race between our read and this write — another update committed first.
+      throw Errors.staleUpdate();
+    }
+
+    if (changedFields.length > 0) {
+      await writeAuditEvent(
+        {
+          action: "COSTING_UPDATED",
+          entityType: "costing_headers",
+          entityId: id,
+          actorUserId: user.userId,
+          actorRole: primaryAuditRole(user),
+          requestId,
+          beforeJson: { customerName: before.customer_name_snapshot, validityDays: before.validity_days },
+          afterJson: { customerName: nextCustomerName, validityDays: nextValidityDays },
+          changedFields,
+        },
+        client,
+      );
+    }
+
+    return rows[0];
+  });
+
+  return NextResponse.json(serializeCosting(after, user.userId));
+});

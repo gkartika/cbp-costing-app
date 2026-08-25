@@ -1,0 +1,1160 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { apiGet, apiPost, apiPatch, apiDelete, type ApiError } from "./clientApi";
+import { StatusPill } from "@/components/Pills";
+import { Modal } from "@/components/Modal";
+import { Ticket, TicketLine, TicketDivider, TicketTotal } from "@/components/Ticket";
+
+type Costing = {
+  costingId: string;
+  quotationNo: string | null;
+  customerName: string;
+  ownerUserId: string;
+  status: string;
+  revisionNo: number;
+  parentCostingId: string | null;
+  validityDays: number;
+  updatedAt: string;
+  canEdit: boolean;
+};
+
+type AuditEvent = {
+  auditEventId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  beforeJson: unknown;
+  afterJson: unknown;
+  changedFields: string[] | null;
+  reason: string | null;
+  actorDisplayName: string | null;
+  actorRole: string;
+  occurredAt: string;
+  requestId: string;
+};
+
+type Explanation = {
+  snapshotId: string;
+  guideVersionId: string;
+  rawWeightPerItemKg: number | null;
+  costingWeightPerItemKg: number | null;
+  basePricePerItem: number;
+  coatingPricePerItem: number;
+  diesPricePerItem: number;
+  unitPriceBeforeRounding: number;
+  unitSellingPrice: number;
+  orderTotal: number;
+  resultHash: string;
+  calculatedAt: string;
+  explainedRules: { table: string; id: string; note?: string; row: Record<string, unknown> | null }[];
+};
+
+type Line = {
+  costingLineId: string;
+  lineNo: number;
+  route: string | null;
+  productFamily: string | null;
+  description: string | null;
+  gradeInput: string | null;
+  threadCondition: string | null;
+  sizeLabel: string | null;
+  diameterMm: number | null;
+  lengthMm: number | null;
+  developedCutLengthMm: number | null;
+  qty: number | null;
+  leadTimeDays: number | null;
+  coatingCode: string | null;
+  diesOption: "yes" | "no_lookup" | "manual" | null;
+  diesTotalCost: number | null;
+  weightTolerancePercent: number | null;
+  marginPercent: number | null;
+  tradingItemId: string | null;
+  updatedAt: string;
+  needsRecalculation: boolean;
+  latestUnitSellingPrice: number | null;
+  latestOrderTotal: number | null;
+};
+
+type LineForm = {
+  route: "TRADING" | "CUSTOM" | "";
+  productFamily: string;
+  description: string;
+  gradeInput: string;
+  threadCondition: string;
+  sizeLabel: string;
+  diameterMm: string;
+  lengthMm: string;
+  developedCutLengthMm: string;
+  qty: string;
+  leadTimeDays: string;
+  coatingCode: string;
+  diesOption: "" | "yes" | "no_lookup" | "manual";
+  diesTotalCost: string;
+  weightTolerancePercent: string;
+  marginPercent: string;
+  tradingItemId: string;
+};
+
+type Lookups = {
+  guideVersionId: string | null;
+  productFamilies: string[];
+  gradesByFamily: Record<string, string[]>;
+  gradeLabelsByFamily: Record<string, Record<string, string>>;
+  gradeToProfile: Record<string, Record<string, string>>;
+  sizesByProfile: Record<string, { sizeLabel: string; diameterMm: number | null }[]>;
+  coatingCodes: string[];
+  leadTimeBucketsByScope: Record<string, { label: string; value: number; ruleId: string }[]>;
+  tradingItemsByCategory: Record<string, { tradingItemId: string; sizeLabel: string }[]>;
+  threadConditionsByFamily: Record<string, string[]>;
+  defaultWeightTolerancePercent: number;
+};
+
+const EMPTY_LOOKUPS: Lookups = {
+  guideVersionId: null,
+  productFamilies: [],
+  gradesByFamily: {},
+  gradeLabelsByFamily: {},
+  gradeToProfile: {},
+  sizesByProfile: {},
+  coatingCodes: [],
+  leadTimeBucketsByScope: {},
+  tradingItemsByCategory: {},
+  threadConditionsByFamily: {},
+  defaultWeightTolerancePercent: 0,
+};
+
+const EMPTY_FORM: LineForm = {
+  route: "",
+  productFamily: "",
+  description: "",
+  gradeInput: "",
+  threadCondition: "",
+  sizeLabel: "",
+  diameterMm: "",
+  lengthMm: "",
+  developedCutLengthMm: "",
+  qty: "1",
+  leadTimeDays: "",
+  coatingCode: "",
+  diesOption: "",
+  diesTotalCost: "",
+  weightTolerancePercent: "",
+  marginPercent: "",
+  tradingItemId: "",
+};
+
+function lineToForm(l: Line): LineForm {
+  return {
+    route: (l.route as "TRADING" | "CUSTOM" | null) ?? "",
+    productFamily: l.productFamily ?? "",
+    description: l.description ?? "",
+    gradeInput: l.gradeInput ?? "",
+    threadCondition: l.threadCondition ?? "",
+    sizeLabel: l.sizeLabel ?? "",
+    diameterMm: l.diameterMm?.toString() ?? "",
+    lengthMm: l.lengthMm?.toString() ?? "",
+    developedCutLengthMm: l.developedCutLengthMm?.toString() ?? "",
+    qty: l.qty?.toString() ?? "1",
+    leadTimeDays: l.leadTimeDays?.toString() ?? "",
+    coatingCode: l.coatingCode ?? "",
+    diesOption: l.diesOption ?? "",
+    diesTotalCost: l.diesTotalCost?.toString() ?? "",
+    weightTolerancePercent: l.weightTolerancePercent?.toString() ?? "",
+    marginPercent: l.marginPercent?.toString() ?? "",
+    tradingItemId: l.tradingItemId ?? "",
+  };
+}
+
+/**
+ * On create, an empty field simply means "not set yet" — omit it. On edit,
+ * an empty field means the user actively cleared it, so it must be sent as
+ * `null` or the stale value survives server-side (e.g. a leftover
+ * developedCutLengthMm silently rerouting a Stud line to the Anchor formula).
+ */
+function formToBody(f: LineForm, mode: "add" | "edit"): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  const set = (key: string, raw: string, parse: (s: string) => unknown = (s) => s) => {
+    if (raw) {
+      body[key] = parse(raw);
+    } else if (mode === "edit") {
+      body[key] = null;
+    }
+  };
+
+  set("route", f.route);
+  set("productFamily", f.productFamily);
+  set("description", f.description);
+  set("gradeInput", f.gradeInput);
+  set("threadCondition", f.threadCondition);
+  set("sizeLabel", f.sizeLabel);
+  set("diameterMm", f.diameterMm, Number);
+  set("lengthMm", f.lengthMm, Number);
+  set("developedCutLengthMm", f.developedCutLengthMm, Number);
+  set("qty", f.qty, Number);
+  set("leadTimeDays", f.leadTimeDays, Number);
+  set("coatingCode", f.coatingCode);
+  set("diesOption", f.diesOption);
+  if (f.diesTotalCost) body.diesTotalCost = Number(f.diesTotalCost);
+  else if (mode === "edit") body.diesTotalCost = null;
+  set("weightTolerancePercent", f.weightTolerancePercent, Number);
+  set("marginPercent", f.marginPercent, Number);
+  set("tradingItemId", f.tradingItemId);
+  return body;
+}
+
+/** Mirrors the server's productTypeLabel() split of "Stud / Anchor" by which length field is filled in — used only to pick the right Lead Time option list, never to change what gets submitted. */
+function resolveTypeLabelForLeadTime(form: LineForm): string | null {
+  if (form.productFamily !== "Stud / Anchor") return form.productFamily || null;
+  if (form.developedCutLengthMm) return "Anchor";
+  if (form.lengthMm) return "Stud";
+  return null;
+}
+
+function fmt(n: number | null | undefined): string {
+  return n === null || n === undefined ? "—" : n.toLocaleString("en-US");
+}
+
+export function Workspace(props: {
+  initialCosting: Costing;
+  initialLines: Line[];
+  currentUserId: string;
+  isSuperAdmin: boolean;
+}) {
+  const router = useRouter();
+  const [costing, setCosting] = useState(props.initialCosting);
+  const [lines, setLines] = useState(props.initialLines);
+  const [panel, setPanel] = useState<{ mode: "closed" | "add" | "edit"; lineId?: string }>({ mode: "closed" });
+  const [form, setForm] = useState<LineForm>(EMPTY_FORM);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lineErrors, setLineErrors] = useState<Record<string, string>>({});
+  const [showPreview, setShowPreview] = useState(false);
+  const [showAudit, setShowAudit] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [showExplanation, setShowExplanation] = useState(false);
+  const [explanation, setExplanation] = useState<Explanation | null>(null);
+  const [adminPanel, setAdminPanel] = useState<"closed" | "void" | "reassign">("closed");
+  const [voidReason, setVoidReason] = useState("");
+  const [reassignNewOwnerId, setReassignNewOwnerId] = useState("");
+  const [reassignReason, setReassignReason] = useState("");
+  const [preview, setPreview] = useState<{
+    totalExPpn: number;
+    lines: { lineNo: number; description: string | null; qty: number; unitSellingPrice: number; orderTotal: number }[];
+    quotationNo: string | null;
+  } | null>(null);
+  const [lookups, setLookups] = useState<Lookups>(EMPTY_LOOKUPS);
+  const [adminUsers, setAdminUsers] = useState<{ userId: string; username: string; displayName: string }[]>([]);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [editingCustomer, setEditingCustomer] = useState(false);
+  const [customers, setCustomers] = useState<{ customerId: string; customerName: string; customerCode: string | null }[]>([]);
+  const [customerSelected, setCustomerSelected] = useState("");
+  const [customerNewName, setCustomerNewName] = useState("");
+
+  const canEdit = costing.canEdit;
+  // Native confirm()/alert() dialogs are inconsistent across browsers and
+  // block automated testing (no in-page way to accept them), so
+  // irreversible-ish actions use this inline confirm banner instead.
+  const [pendingConfirm, setPendingConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+
+  useEffect(() => {
+    apiGet<Lookups>("/api/guides/active/lookups")
+      .then(setLookups)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!canEdit) return;
+    fetch("/api/customers")
+      .then((r) => r.json())
+      .then((data) => setCustomers(data.customers ?? []))
+      .catch(() => {});
+  }, [canEdit]);
+
+  const CUSTOMER_ADD_NEW = "__add_new__";
+
+  function openCustomerEditor() {
+    const existing = customers.find((c) => c.customerName === costing.customerName);
+    setCustomerSelected(existing?.customerId ?? "");
+    setCustomerNewName("");
+    setEditingCustomer(true);
+  }
+
+  async function saveCustomer() {
+    const customerName =
+      customerSelected === CUSTOMER_ADD_NEW
+        ? customerNewName.trim()
+        : (customers.find((c) => c.customerId === customerSelected)?.customerName ?? "");
+    if (!customerName) {
+      setError("Pilih atau masukkan nama customer.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPatch(`/api/costings/${costing.costingId}`, { expectedUpdatedAt: costing.updatedAt, customerName });
+      setEditingCustomer(false);
+      await refreshCosting();
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal menyimpan customer.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!props.isSuperAdmin) return;
+    apiGet<{ users: { userId: string; username: string; displayName: string }[] }>("/api/admin/users")
+      .then((data) => setAdminUsers(data.users))
+      .catch(() => {});
+  }, [props.isSuperAdmin]);
+
+  async function refreshCosting() {
+    const data = await apiGet<Costing & { lines: Line[] }>(`/api/costings/${costing.costingId}`);
+    setCosting(data);
+    setLines(data.lines);
+  }
+
+  function openAddPanel() {
+    setForm(EMPTY_FORM);
+    setPanel({ mode: "add" });
+    setError(null);
+  }
+
+  function openEditPanel(line: Line) {
+    setForm(lineToForm(line));
+    setPanel({ mode: "edit", lineId: line.costingLineId });
+    setError(null);
+  }
+
+  async function saveLine() {
+    setBusy(true);
+    setSaveStatus("saving");
+    setError(null);
+    try {
+      if (panel.mode === "add") {
+        await apiPost(`/api/costings/${costing.costingId}/lines`, formToBody(form, "add"));
+      } else if (panel.mode === "edit" && panel.lineId) {
+        const line = lines.find((l) => l.costingLineId === panel.lineId)!;
+        await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
+          expectedUpdatedAt: line.updatedAt,
+          ...formToBody(form, "edit"),
+        });
+      }
+      setPanel({ mode: "closed" });
+      await refreshCosting();
+      router.refresh();
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal menyimpan item.");
+      setSaveStatus("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function deleteLine(line: Line) {
+    setPendingConfirm({
+      message: `Hapus item #${line.lineNo}?`,
+      onConfirm: async () => {
+        setBusy(true);
+        try {
+          await apiDelete(`/api/costings/${costing.costingId}/lines/${line.costingLineId}`);
+          await refreshCosting();
+        } catch (e) {
+          setError((e as ApiError).message ?? "Gagal menghapus item.");
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
+  }
+
+  async function calculateAll() {
+    setBusy(true);
+    setError(null);
+    setLineErrors({});
+    try {
+      await apiPost(`/api/costings/${costing.costingId}/calculate`);
+      await refreshCosting();
+    } catch (e) {
+      const err = e as ApiError;
+      setError(err.message ?? "Gagal menghitung.");
+      if (err.lineErrors) {
+        setLineErrors(Object.fromEntries(err.lineErrors.map((le) => [le.lineId, le.message])));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function finalize() {
+    setPendingConfirm({
+      message: "Finalisasi costing ini? Setelah final, perubahan hanya melalui revisi baru.",
+      onConfirm: async () => {
+        setBusy(true);
+        setError(null);
+        try {
+          await apiPost(`/api/costings/${costing.costingId}/finalize`, { expectedUpdatedAt: costing.updatedAt });
+          await refreshCosting();
+        } catch (e) {
+          setError((e as ApiError).message ?? "Gagal finalisasi.");
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
+  }
+
+  async function createRevision() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await apiPost<{ costingId: string }>(`/api/costings/${costing.costingId}/revisions`);
+      router.push(`/costings/${created.costingId}`);
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal membuat revisi.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function duplicateAsNew() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await apiPost<{ costingId: string }>(`/api/costings/${costing.costingId}/duplicate`);
+      router.push(`/costings/${created.costingId}`);
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal menduplikasi.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadPreview() {
+    try {
+      // Read-only at any status; never audited (AUD-016 — a screen view isn't an export).
+      const data = await apiGet<{ document: typeof preview }>(`/api/costings/${costing.costingId}/quotation-summary`);
+      setPreview(data.document);
+      setShowPreview(true);
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal memuat preview.");
+    }
+  }
+
+  async function downloadXlsx() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/costings/${costing.costingId}/export`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error?.message ?? "Gagal mengekspor quotation.");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const filenameMatch = disposition.match(/filename="([^"]+)"/);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filenameMatch?.[1] ?? `${costing.costingId}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal mengekspor quotation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitVoid() {
+    if (!voidReason.trim()) {
+      setError("Alasan pembatalan wajib diisi.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPost(`/api/costings/${costing.costingId}/void`, { reason: voidReason.trim() });
+      setAdminPanel("closed");
+      setVoidReason("");
+      await refreshCosting();
+      router.refresh();
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal membatalkan costing.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitReassign() {
+    if (!reassignNewOwnerId.trim() || !reassignReason.trim()) {
+      setError("Owner baru dan alasan wajib diisi.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPost(`/api/costings/${costing.costingId}/reassign`, {
+        newOwnerId: reassignNewOwnerId.trim(),
+        reason: reassignReason.trim(),
+      });
+      setAdminPanel("closed");
+      setReassignNewOwnerId("");
+      setReassignReason("");
+      await refreshCosting();
+      router.refresh();
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal reassign owner.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadExplanation(line: Line) {
+    try {
+      const data = await apiGet<Explanation>(`/api/costings/${costing.costingId}/lines/${line.costingLineId}/explanation`);
+      setExplanation(data);
+      setShowExplanation(true);
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal memuat penjelasan perhitungan.");
+    }
+  }
+
+  async function loadAudit() {
+    try {
+      const data = await apiGet<{ events: AuditEvent[] }>(`/api/costings/${costing.costingId}/audit`);
+      setAuditEvents(data.events);
+      setShowAudit(true);
+    } catch (e) {
+      setError((e as ApiError).message ?? "Gagal memuat audit trail.");
+    }
+  }
+
+  const editableStatus = costing.status === "draft" || costing.status === "calculated";
+  const isOwner = costing.ownerUserId === props.currentUserId;
+
+  const availableGrades = form.productFamily ? (lookups.gradesByFamily[form.productFamily] ?? []) : [];
+  const gradeLabels = form.productFamily ? (lookups.gradeLabelsByFamily[form.productFamily] ?? {}) : {};
+  const gradeLabelFor = (family: string | null, grade: string | null): string | null =>
+    family && grade ? (lookups.gradeLabelsByFamily[family]?.[grade] ?? grade) : grade;
+  const resolvedProfile =
+    form.productFamily && form.gradeInput ? lookups.gradeToProfile[form.productFamily]?.[form.gradeInput] : undefined;
+  const availableSizes = resolvedProfile ? (lookups.sizesByProfile[resolvedProfile] ?? []) : [];
+  const availableThreadConditions = form.productFamily ? (lookups.threadConditionsByFamily[form.productFamily] ?? []) : [];
+  const leadTimeScope = resolveTypeLabelForLeadTime(form);
+  const availableLeadTimes = leadTimeScope ? (lookups.leadTimeBucketsByScope[leadTimeScope] ?? []) : [];
+  const availableTradingItems = form.productFamily ? (lookups.tradingItemsByCategory[form.productFamily] ?? []) : [];
+
+  return (
+    <div className="app-shell" style={{ maxWidth: 1220 }}>
+      <div style={{ marginBottom: 16 }}>
+        <a href="/dashboard" className="link-btn">
+          &larr; Dashboard
+        </a>
+      </div>
+
+      <header className="app-header">
+        <div className="brand">
+          <div className="brand-mark">CBP</div>
+          <div className="brand-text">
+            {editingCustomer ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <select value={customerSelected} onChange={(e) => setCustomerSelected(e.target.value)} style={{ minWidth: 200 }}>
+                  <option value="">— pilih customer —</option>
+                  {customers.map((c) => (
+                    <option key={c.customerId} value={c.customerId}>
+                      {c.customerName}
+                    </option>
+                  ))}
+                  <option value={CUSTOMER_ADD_NEW}>+ Customer baru…</option>
+                </select>
+                {customerSelected === CUSTOMER_ADD_NEW && (
+                  <input
+                    value={customerNewName}
+                    onChange={(e) => setCustomerNewName(e.target.value)}
+                    placeholder="Nama customer baru"
+                    style={{ width: 180 }}
+                  />
+                )}
+                <button onClick={saveCustomer} disabled={busy} className="btn small">
+                  Save
+                </button>
+                <button onClick={() => setEditingCustomer(false)} disabled={busy} className="btn secondary small">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <h1 style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                {costing.customerName || <em style={{ color: "var(--ink-soft)", fontSize: 15 }}>belum ada customer</em>}
+                {canEdit && editableStatus && (
+                  <button onClick={openCustomerEditor} className="link-btn" style={{ fontSize: 12 }}>
+                    {costing.customerName ? "change" : "+ set customer"}
+                  </button>
+                )}
+              </h1>
+            )}
+            <p>
+              {costing.quotationNo ?? "no quotation no."} {costing.revisionNo > 0 && `· revision #${costing.revisionNo}`}
+            </p>
+          </div>
+        </div>
+        <div className="header-actions">
+          <StatusPill status={costing.status} />
+          {!canEdit && <span className="pill neutral">View-only</span>}
+          {saveStatus !== "idle" && (
+            <span
+              className={`save-status ${saveStatus === "saving" ? "busy" : saveStatus === "error" ? "error" : "ok"}`}
+            >
+              {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "error" : "saved"}
+            </span>
+          )}
+        </div>
+      </header>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        <button onClick={loadPreview} className="btn secondary small">
+          Preview
+        </button>
+        <button onClick={loadAudit} className="btn secondary small">
+          Audit Trail
+        </button>
+        {(costing.status === "finalized" || costing.status === "revised") && (
+          <button onClick={downloadXlsx} disabled={busy} className="btn secondary small">
+            Download XLSX
+          </button>
+        )}
+        {canEdit && editableStatus && (
+          <button onClick={calculateAll} disabled={busy || lines.length === 0} className="btn small">
+            Calculate All
+          </button>
+        )}
+        {canEdit && costing.status === "calculated" && (
+          <button onClick={finalize} disabled={busy} className="btn small">
+            Finalize
+          </button>
+        )}
+        {isOwner && (costing.status === "finalized" || costing.status === "revised") && (
+          <button onClick={createRevision} disabled={busy} className="btn small">
+            Create Revision
+          </button>
+        )}
+        <button onClick={duplicateAsNew} disabled={busy} className="btn secondary small">
+          Duplicate as New
+        </button>
+        {props.isSuperAdmin && (costing.status === "finalized" || costing.status === "revised") && (
+          <button onClick={() => setAdminPanel("void")} disabled={busy} className="btn danger small">
+            Void
+          </button>
+        )}
+        {props.isSuperAdmin && (
+          <button onClick={() => setAdminPanel("reassign")} disabled={busy} className="btn secondary small">
+            Reassign Owner
+          </button>
+        )}
+      </div>
+
+      {adminPanel === "void" && (
+        <div className="card" style={{ borderColor: "var(--danger)" }}>
+          <h2 style={{ color: "var(--danger)" }}>Void this costing (Super Admin)</h2>
+          <div className="field-row cols-1">
+            <label className="field">
+              <span className="field-label">Reason (required)</span>
+              <input value={voidReason} onChange={(e) => setVoidReason(e.target.value)} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={submitVoid} disabled={busy} className="btn danger small">
+              Confirm Void
+            </button>
+            <button onClick={() => setAdminPanel("closed")} disabled={busy} className="btn secondary small">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {adminPanel === "reassign" && (
+        <div className="card">
+          <h2>Reassign owner (Super Admin)</h2>
+          <div className="field-row cols-2">
+            <label className="field">
+              <span className="field-label">New owner (required)</span>
+              <select value={reassignNewOwnerId} onChange={(e) => setReassignNewOwnerId(e.target.value)}>
+                <option value="">— pilih user —</option>
+                {adminUsers
+                  .filter((u) => u.userId !== costing.ownerUserId)
+                  .map((u) => (
+                    <option key={u.userId} value={u.userId}>
+                      {u.displayName} ({u.username})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">Reason (required)</span>
+              <input value={reassignReason} onChange={(e) => setReassignReason(e.target.value)} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={submitReassign} disabled={busy} className="btn small">
+              Confirm Reassign
+            </button>
+            <button onClick={() => setAdminPanel("closed")} disabled={busy} className="btn secondary small">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pendingConfirm && (
+        <div className="warn-note" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>{pendingConfirm.message}</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => {
+                const action = pendingConfirm.onConfirm;
+                setPendingConfirm(null);
+                action();
+              }}
+              disabled={busy}
+              className="btn small"
+            >
+              Ya, lanjutkan
+            </button>
+            <button onClick={() => setPendingConfirm(null)} disabled={busy} className="btn secondary small">
+              Batal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="error-note">{error}</p>}
+
+      <div className="card">
+        <div className="section-actions">
+          <h2 style={{ marginBottom: 0 }}>Items</h2>
+          {canEdit && editableStatus && panel.mode === "closed" && (
+            <button onClick={openAddPanel} className="btn small">
+              + Add Item
+            </button>
+          )}
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Route</th>
+                <th>Description</th>
+                <th>Qty</th>
+                <th>Unit Price</th>
+                <th>Order Total</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.costingLineId}>
+                  <td className="mono">{l.lineNo}</td>
+                  <td>
+                    {l.route ? (
+                      <span className="pill neutral">{l.route}</span>
+                    ) : (
+                      <span className="pill danger">belum dipilih</span>
+                    )}
+                  </td>
+                  <td>
+                    {l.description ?? `${l.productFamily ?? ""} ${gradeLabelFor(l.productFamily, l.gradeInput) ?? ""}`}
+                    {l.needsRecalculation && <span className="pill amber" style={{ marginLeft: 6 }}>perlu hitung ulang</span>}
+                    {lineErrors[l.costingLineId] && (
+                      <div className="error-note" style={{ marginTop: 4, marginBottom: 0 }}>
+                        {lineErrors[l.costingLineId]}
+                      </div>
+                    )}
+                  </td>
+                  <td className="mono">{l.qty}</td>
+                  <td className="mono">{fmt(l.latestUnitSellingPrice)}</td>
+                  <td className="mono">{fmt(l.latestOrderTotal)}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {canEdit && editableStatus && (
+                        <>
+                          <button onClick={() => openEditPanel(l)} className="btn secondary small">
+                            Edit
+                          </button>
+                          <button onClick={() => deleteLine(l)} className="icon-btn">
+                            ✕
+                          </button>
+                        </>
+                      )}
+                      {l.latestUnitSellingPrice !== null && (
+                        <button onClick={() => loadExplanation(l)} className="btn secondary small">
+                          Explain
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {lines.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="empty-state">
+                    Belum ada item.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {panel.mode !== "closed" && (
+        <div
+          style={{
+            position: "fixed",
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 400,
+            background: "var(--surface)",
+            borderLeft: "1px solid var(--border)",
+            padding: 20,
+            overflowY: "auto",
+            boxShadow: "-4px 0 16px rgba(0,0,0,0.15)",
+            zIndex: 100,
+          }}
+        >
+          <h2 style={{ fontSize: 16, marginBottom: 16 }}>{panel.mode === "add" ? "Add Item" : "Edit Item"}</h2>
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Route</span>
+            <select
+              value={form.route}
+              onChange={(e) => setForm({ ...form, route: e.target.value as LineForm["route"] })}
+            >
+              <option value="">-- pilih --</option>
+              <option value="CUSTOM">Custom Production</option>
+              <option value="TRADING">Trading</option>
+            </select>
+          </label>
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Product Family</span>
+            <select
+              value={form.productFamily}
+              onChange={(e) => setForm({ ...form, productFamily: e.target.value, gradeInput: "", diameterMm: "" })}
+            >
+              <option value="">-- pilih --</option>
+              {lookups.productFamilies.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Grade</span>
+            {availableGrades.length > 0 ? (
+              <select
+                value={form.gradeInput}
+                onChange={(e) => setForm({ ...form, gradeInput: e.target.value, diameterMm: "" })}
+              >
+                <option value="">-- pilih --</option>
+                {availableGrades.map((g) => (
+                  <option key={g} value={g}>
+                    {gradeLabels[g] ?? g}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={form.gradeInput}
+                onChange={(e) => setForm({ ...form, gradeInput: e.target.value })}
+                placeholder={form.productFamily ? "no grades in active guide" : "pilih Product Family dulu"}
+              />
+            )}
+          </label>
+
+          {availableThreadConditions.length > 0 && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Thread Condition</span>
+              <select
+                value={form.threadCondition}
+                onChange={(e) => setForm({ ...form, threadCondition: e.target.value })}
+              >
+                <option value="">-- pilih --</option>
+                {availableThreadConditions.map((tc) => (
+                  <option key={tc} value={tc}>
+                    {tc}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Description</span>
+            <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          </label>
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Size / Diameter (mm)</span>
+            {availableSizes.length > 0 ? (
+              <select
+                value={form.sizeLabel}
+                onChange={(e) => {
+                  const chosen = availableSizes.find((s) => s.sizeLabel === e.target.value);
+                  setForm({ ...form, sizeLabel: e.target.value, diameterMm: chosen?.diameterMm?.toString() ?? "" });
+                }}
+              >
+                <option value="">-- pilih --</option>
+                {availableSizes.map((s) => (
+                  <option key={s.sizeLabel} value={s.sizeLabel}>
+                    {s.sizeLabel}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="number"
+                value={form.diameterMm}
+                onChange={(e) => setForm({ ...form, diameterMm: e.target.value, sizeLabel: "" })}
+                placeholder={resolvedProfile ? "no sizes in active guide" : "pilih Grade dulu"}
+              />
+            )}
+          </label>
+
+          {form.route === "CUSTOM" && (
+            <>
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">Length (mm) — finished length (Bolt/Stud)</span>
+                <input
+                  type="number"
+                  value={form.lengthMm}
+                  onChange={(e) => setForm({ ...form, lengthMm: e.target.value })}
+                />
+              </label>
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">Developed cut length (mm) — Anchor only</span>
+                <input
+                  type="number"
+                  value={form.developedCutLengthMm}
+                  onChange={(e) => setForm({ ...form, developedCutLengthMm: e.target.value })}
+                />
+              </label>
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">Lead time</span>
+                {availableLeadTimes.length > 0 ? (
+                  <select value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}>
+                    <option value="">-- pilih --</option>
+                    {availableLeadTimes.map((b) => (
+                      <option key={b.ruleId} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="number"
+                    value={form.leadTimeDays}
+                    onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}
+                    placeholder="days"
+                  />
+                )}
+              </label>
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">Dies/Tooling tersedia?</span>
+                <select
+                  value={form.diesOption}
+                  onChange={(e) => setForm({ ...form, diesOption: e.target.value as LineForm["diesOption"] })}
+                >
+                  <option value="">n/a</option>
+                  <option value="yes">Ya</option>
+                  <option value="no_lookup">Tidak</option>
+                  <option value="manual">Lainnya...</option>
+                </select>
+              </label>
+              {form.diesOption === "manual" && (
+                <label className="field" style={{ marginBottom: 12 }}>
+                  <span className="field-label">Dies total cost</span>
+                  <input
+                    type="number"
+                    value={form.diesTotalCost}
+                    onChange={(e) => setForm({ ...form, diesTotalCost: e.target.value })}
+                  />
+                </label>
+              )}
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">
+                  Weight tolerance (0–1, e.g. 0.02 = 2%) — leave blank for guide default ({(lookups.defaultWeightTolerancePercent * 100).toFixed(2)}%)
+                </span>
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  max="1"
+                  value={form.weightTolerancePercent}
+                  onChange={(e) => setForm({ ...form, weightTolerancePercent: e.target.value })}
+                  placeholder={lookups.defaultWeightTolerancePercent.toString()}
+                />
+              </label>
+            </>
+          )}
+
+          {form.route === "TRADING" && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Trading item (pricelist) — leave blank to use a quote instead</span>
+              {availableTradingItems.length > 0 ? (
+                <select value={form.tradingItemId} onChange={(e) => setForm({ ...form, tradingItemId: e.target.value })}>
+                  <option value="">— use trading quote instead —</option>
+                  {availableTradingItems.map((t) => (
+                    <option key={t.tradingItemId} value={t.tradingItemId}>
+                      {form.productFamily} {t.sizeLabel}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={form.tradingItemId}
+                  onChange={(e) => setForm({ ...form, tradingItemId: e.target.value })}
+                  placeholder={form.productFamily ? "no pricelist items in active guide" : "pilih Product Family dulu"}
+                />
+              )}
+            </label>
+          )}
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Coating code</span>
+            <select value={form.coatingCode} onChange={(e) => setForm({ ...form, coatingCode: e.target.value })}>
+              <option value="">None</option>
+              {lookups.coatingCodes.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Qty</span>
+            <input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
+          </label>
+
+          {form.route === "TRADING" && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Margin (0–0.999, e.g. 0.25)</span>
+              <input
+                type="number"
+                step="0.01"
+                value={form.marginPercent}
+                onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
+              />
+            </label>
+          )}
+
+          {error && <p className="error-note">{error}</p>}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={saveLine} disabled={busy} className="btn">
+              Save
+            </button>
+            <button onClick={() => setPanel({ mode: "closed" })} disabled={busy} className="btn secondary">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showPreview && preview && (
+        <Modal onClose={() => setShowPreview(false)} width={560}>
+          <Ticket title="Quotation Preview" tag={preview.quotationNo ?? "DRAFT"}>
+            {preview.lines.map((l) => (
+              <div key={l.lineNo}>
+                <TicketLine label={l.description ?? `Item #${l.lineNo}`} value={fmt(l.orderTotal)} />
+                <TicketLine label={`${l.qty} × ${fmt(l.unitSellingPrice)}`} value="" sub />
+              </div>
+            ))}
+          </Ticket>
+          <TicketTotal label="Total (excl. PPN)" value={fmt(preview.totalExPpn)} />
+          <div style={{ background: "var(--ink)", padding: "0 18px 16px" }}>
+            <button onClick={() => setShowPreview(false)} className="btn secondary small">
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {showAudit && (
+        <Modal onClose={() => setShowAudit(false)} width={640}>
+          <h2 style={{ marginBottom: 14 }}>Audit Trail</h2>
+          {auditEvents.length === 0 && <p className="empty-state">No events yet.</p>}
+          {auditEvents.map((ev) => (
+            <div key={ev.auditEventId} style={{ borderBottom: "1px solid var(--surface-alt)", padding: "10px 0", fontSize: 13 }}>
+              <div>
+                <strong>{ev.action}</strong>{" "}
+                <span style={{ color: "var(--ink-soft)" }}>
+                  · {ev.entityType} · {new Date(ev.occurredAt).toLocaleString()}
+                </span>
+              </div>
+              <div style={{ color: "var(--ink-soft)" }}>
+                {ev.actorDisplayName ?? "system"} ({ev.actorRole})
+                {ev.reason && <> — {ev.reason}</>}
+              </div>
+              {ev.changedFields && ev.changedFields.length > 0 && (
+                <div style={{ color: "var(--ink-soft)", fontSize: 12 }}>Changed: {ev.changedFields.join(", ")}</div>
+              )}
+            </div>
+          ))}
+          <button onClick={() => setShowAudit(false)} className="btn secondary small" style={{ marginTop: 14 }}>
+            Close
+          </button>
+        </Modal>
+      )}
+
+      {showExplanation && explanation && (
+        <Modal onClose={() => setShowExplanation(false)} width={620}>
+          <Ticket title="Calculation Explanation" tag={new Date(explanation.calculatedAt).toLocaleDateString()}>
+            {explanation.rawWeightPerItemKg !== null && (
+              <TicketLine label="Raw weight / item" value={`${explanation.rawWeightPerItemKg.toFixed(6)} kg`} sub />
+            )}
+            {explanation.costingWeightPerItemKg !== null && (
+              <TicketLine
+                label="Costing weight / item (+2% tolerance)"
+                value={`${explanation.costingWeightPerItemKg.toFixed(6)} kg`}
+                sub
+              />
+            )}
+            <TicketLine label="Base price / item" value={fmt(explanation.basePricePerItem)} />
+            <TicketLine label="Coating price / item" value={fmt(explanation.coatingPricePerItem)} />
+            <TicketLine label="Dies price / item" value={fmt(explanation.diesPricePerItem)} />
+            <TicketLine label="Before rounding" value={explanation.unitPriceBeforeRounding.toFixed(2)} sub />
+            <TicketDivider />
+            {explanation.explainedRules.map((r, i) => (
+              <TicketLine
+                key={i}
+                label={r.table}
+                value={(r.row?.source_key as string) ?? r.id}
+                sub
+              />
+            ))}
+          </Ticket>
+          <TicketTotal
+            label="Unit selling price"
+            value={fmt(explanation.unitSellingPrice)}
+            note={`Order total: ${fmt(explanation.orderTotal)} · hash ${explanation.resultHash.slice(0, 16)}…`}
+          />
+          <div style={{ background: "var(--ink)", padding: "0 18px 16px" }}>
+            <button onClick={() => setShowExplanation(false)} className="btn secondary small">
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
