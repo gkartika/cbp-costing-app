@@ -618,3 +618,99 @@ describe("Customer is optional at Draft creation but required before Finalize", 
     expect(finalized.json.status).toBe("finalized");
   });
 });
+
+describe("AT-REPORT-001/002/003: report generation", () => {
+  it("filters by customer, period, status and PO, and totals what it returns", async () => {
+    await createUser({ username: "rep_user_001", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("rep_user_001", PASSWORD);
+
+    // Two finalized quotations for different customers; one is marked won.
+    const a = await createCostingWithBoltLine(cookie);
+    await apiFetch(`/api/costings/${a.costingId}/calculate`, { method: "POST", cookie });
+    const aCalc = await apiFetch(`/api/costings/${a.costingId}`, { cookie });
+    await apiFetch(`/api/costings/${a.costingId}/finalize`, {
+      method: "POST",
+      cookie,
+      body: { expectedUpdatedAt: aCalc.json.updatedAt },
+    });
+    await apiFetch(`/api/costings/${a.costingId}/po`, { method: "POST", cookie, body: { isPo: true, poNumber: "PO/RPT/1" } });
+
+    const b = await createCostingWithBoltLine(cookie);
+    await apiFetch(`/api/costings/${b.costingId}`, {
+      method: "PATCH",
+      cookie,
+      body: { expectedUpdatedAt: (await apiFetch(`/api/costings/${b.costingId}`, { cookie })).json.updatedAt, customerName: "PT Reporting Kedua" },
+    });
+    await apiFetch(`/api/costings/${b.costingId}/calculate`, { method: "POST", cookie });
+
+    // Default issued-only scope sees the finalized one, not the calculated one.
+    const issued = await apiFetch("/api/reports?status=finalized&status=revised", { cookie });
+    expect(issued.status).toBe(200);
+    const issuedIds = (issued.json.summary as { costingId: string }[]).map((s) => s.costingId);
+    expect(issuedIds).toContain(a.costingId);
+    expect(issuedIds).not.toContain(b.costingId);
+
+    // Widening the status filter brings the in-progress one in.
+    const withCalc = await apiFetch("/api/reports?status=calculated", { cookie });
+    expect((withCalc.json.summary as { costingId: string }[]).map((s) => s.costingId)).toContain(b.costingId);
+
+    // PO filter narrows to won business, and the totals describe exactly those rows.
+    const won = await apiFetch("/api/reports?status=finalized&status=revised&po=po", { cookie });
+    const wonSummary = won.json.summary as { costingId: string; isPo: boolean; totalNominal: number }[];
+    expect(wonSummary.every((s) => s.isPo)).toBe(true);
+    expect(wonSummary.map((s) => s.costingId)).toContain(a.costingId);
+    const totals = won.json.totals as { costingCount: number; grandTotal: number };
+    expect(totals.costingCount).toBe(wonSummary.length);
+    expect(totals.grandTotal).toBeCloseTo(
+      wonSummary.reduce((sum, s) => sum + (s.totalNominal ?? 0), 0),
+      6,
+    );
+
+    // Customer filter is a case-insensitive partial match.
+    const byCustomer = await apiFetch("/api/reports?customer=reporting%20kedua&status=calculated", { cookie });
+    const names = (byCustomer.json.summary as { customerName: string }[]).map((s) => s.customerName);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.every((n) => n.toLowerCase().includes("reporting kedua"))).toBe(true);
+
+    // A period that excludes today returns nothing, proving the date bounds bite.
+    const empty = await apiFetch("/api/reports?from=2000-01-01&to=2000-01-31", { cookie });
+    expect((empty.json.totals as { costingCount: number }).costingCount).toBe(0);
+  });
+
+  it("summary and line detail always describe the same set of costings", async () => {
+    await createUser({ username: "rep_user_002", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("rep_user_002", PASSWORD);
+    const { costingId } = await createCostingWithBoltLine(cookie);
+    await apiFetch(`/api/costings/${costingId}/calculate`, { method: "POST", cookie });
+
+    const res = await apiFetch("/api/reports?status=calculated", { cookie });
+    const summaryIds = new Set((res.json.summary as { costingId: string }[]).map((s) => s.costingId));
+    const lineIds = new Set((res.json.lines as { costingId: string }[]).map((l) => l.costingId));
+    // Every line must belong to a costing in the summary — the two sheets are
+    // built from one filter and must never disagree about scope.
+    for (const id of lineIds) expect(summaryIds.has(id)).toBe(true);
+  });
+
+  it("exports a real XLSX and records the export in the audit trail", async () => {
+    await createUser({ username: "rep_user_003", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("rep_user_003", PASSWORD);
+
+    const res = await fetch(`${BASE_URL}/api/reports/export?status=finalized&status=revised`, { headers: { cookie } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("spreadsheetml");
+    expect(res.headers.get("content-disposition")).toContain(".xlsx");
+
+    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(bytes.length).toBeGreaterThan(0);
+    // XLSX is a zip archive; "PK" proves a real workbook, not an error page.
+    expect(bytes.subarray(0, 2).toString()).toBe("PK");
+
+    const audit = await pool.query(`SELECT 1 FROM audit_events WHERE action = 'REPORT_EXPORTED'`);
+    expect(audit.rows.length).toBeGreaterThan(0);
+  });
+
+  it("requires authentication", async () => {
+    const res = await apiFetch("/api/reports");
+    expect(res.status).toBe(401);
+  });
+});
