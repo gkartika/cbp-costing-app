@@ -12,6 +12,7 @@ const EXPLAINABLE_TABLES: Record<string, string> = {
   material_size_guides: "size_guide_id",
   raw_bar_stock: "stock_id",
   dies_cost_guides: "dies_cost_id",
+  minimum_prices: "minimum_price_id",
   price_per_kg: "price_id",
   grade_price_aliases: "alias_id",
   adjustment_rules: "adjustment_rule_id",

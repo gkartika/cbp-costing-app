@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { seedGuideVersion } from "./fixtures/seedGuideVersion";
 import { loadGuideContext } from "../src/lib/calc/loadGuideContext";
-import { calculateCustomLine, type CustomLineInput } from "../src/lib/calc/customPipeline";
+import { calculateCustomLine, materialClassFor, type CustomLineInput } from "../src/lib/calc/customPipeline";
 import { calculateTradingPricelistLine, calculateTradingQuoteLine } from "../src/lib/calc/tradingPipeline";
 import {
   resolveProfile,
@@ -11,6 +11,7 @@ import {
   resolvePricePerKg,
   resolveRawBarDiameter,
   resolveDiesCost,
+  resolveMinimumPrice,
 } from "../src/lib/calc/resolvers";
 import { ceilingToIncrement } from "../src/lib/calc/rounding";
 import { computeCoatingPrice } from "../src/lib/calc/coating";
@@ -377,6 +378,65 @@ describe("AT-DIES-003/004/005: dies cost guide (system lookup, 'Tidak')", () => 
   });
 });
 
+describe("AT-MINPRICE-001..004: minimum selling price floor (DEC-050)", () => {
+  // This M20 nut calculates well under its 12,500 Non-Stainless floor, so it
+  // is the fixture's natural below-floor case.
+  const cheapNut: CustomLineInput = {
+    productFamily: "Nut",
+    gradeOrSpec: "2H",
+    sizeLabel: "M20",
+    diameterMm: 20,
+    qty: 400,
+    leadTimeDays: null,
+    lengthMm: null,
+    developedCutLengthMm: null,
+    coatingCode: null,
+    diesOption: null,
+    diesTotalCost: null,
+  };
+
+  it("AT-MINPRICE-001: raises a below-floor Nut/Non-Stainless item to its 12,500 floor", () => {
+    const r = calculateCustomLine(ctx, cheapNut);
+    // Nothing is added after the floor here (no coating, no dies), so the
+    // floor is the whole price — proving it is applied, not merely resolved.
+    expect(r.basePricePerItem).toBe(12500);
+    expect(r.unitSellingPrice).toBe(12500);
+  });
+
+  it("AT-MINPRICE-002: classifies grades onto the right floor, reusing the Lead Time/Quantity stainless split", () => {
+    expect(materialClassFor("Bolt", "A325")).toBe("Non-Stainless");
+    expect(materialClassFor("Bolt", "SS304")).toBe("Stainless");
+    expect(materialClassFor("Bolt", "SUS310")).toBe("Stainless");
+    expect(materialClassFor("Nut", "2H")).toBe("Non-Stainless");
+    expect(materialClassFor("Nut", "A194-8")).toBe("Stainless");
+
+    expect(resolveMinimumPrice(ctx, "Bolt", "Non-Stainless")?.minimumPrice).toBe(15000);
+    expect(resolveMinimumPrice(ctx, "Bolt", "Stainless")?.minimumPrice).toBe(23500);
+    expect(resolveMinimumPrice(ctx, "Nut", "Stainless")?.minimumPrice).toBe(18000);
+    // Families with no published floor must return null, not zero.
+    expect(resolveMinimumPrice(ctx, "Washer", "Non-Stainless")).toBeNull();
+  });
+
+  it("AT-MINPRICE-003: leaves an above-floor item's calculated price untouched", () => {
+    const r = calculateCustomLine(ctx, boltBase);
+    expect(r.basePricePerItem).toBeGreaterThan(15000);
+    // Same value the pre-existing SIM-BOLT-QTY-30 golden case asserts, i.e.
+    // introducing the floor did not perturb normal pricing.
+    expect(r.unitSellingPrice).toBe(28000);
+  });
+
+  it("AT-MINPRICE-004: applies the floor BEFORE coating, so a floor-priced item still pays for its coating on top", () => {
+    const plain = calculateCustomLine(ctx, cheapNut);
+    const coated = calculateCustomLine(ctx, { ...cheapNut, coatingCode: "HDG" });
+
+    expect(plain.basePricePerItem).toBe(12500);
+    expect(coated.basePricePerItem).toBe(12500);
+    // Coating is added on top of the floor rather than absorbed by it.
+    expect(coated.coatingPricePerItem).toBeGreaterThan(0);
+    expect(coated.unitPriceBeforeRounding).toBeCloseTo(12500 + coated.coatingPricePerItem, 6);
+  });
+});
+
 describe("AT-WEIGHT-TOLERANCE-001/002: per-line weight tolerance override", () => {
   it("omitted -> falls back to app_config.CUSTOM_WEIGHT_TOLERANCE (2%)", () => {
     const r = calculateCustomLine(ctx, boltBase);
@@ -719,9 +779,21 @@ describe("AT-LEAD-005/006: Nut now carries its own grade-tiered lead-time surcha
   };
 
   it("AT-LEAD-005: 2H (Nut low tier, per business confirmation) pays +60% at 7 days vs 0% at 28", () => {
+    // Asserted against the resolved rules rather than a price ratio: this
+    // M20 nut calculates below the 12,500 minimum-price floor (DEC-050), so
+    // the 28-day price is the floor, not weight x rate x 1.0, and a price
+    // ratio would be measuring the floor instead of the surcharge.
+    const low7 = resolveAdjustmentRule(ctx, { costingRoute: "Custom Production", ruleGroup: "Lead Time", scope: "Nut|CarbonLow", value: 7 });
+    const low28 = resolveAdjustmentRule(ctx, { costingRoute: "Custom Production", ruleGroup: "Lead Time", scope: "Nut|CarbonLow", value: 28 });
+    expect(low7?.rule.adjustmentValue).toBeCloseTo(0.6, 6);
+    expect(low28?.rule.adjustmentValue).toBeCloseTo(0, 6);
+
+    // End to end on this cheap nut the floor is what binds at 28 days, while
+    // the 7-day surcharge lifts the price clear of it.
     const r7 = calculateCustomLine(ctx, { ...nutBase, leadTimeDays: 7 });
     const r28 = calculateCustomLine(ctx, { ...nutBase, leadTimeDays: 28 });
-    expect(r7.basePricePerItem).toBeCloseTo(r28.basePricePerItem * 1.6, 4);
+    expect(r28.basePricePerItem).toBe(12500);
+    expect(r7.basePricePerItem).toBeGreaterThan(12500);
   });
 
   it("AT-LEAD-006: Nut's tier boundary sits one class over from Bolt's — CarbonHigh/Stainless share 20/35/50% at 3wk/2wk/10d but diverge at 7 days (100% vs 70%)", () => {
@@ -735,9 +807,22 @@ describe("AT-LEAD-005/006: Nut now carries its own grade-tiered lead-time surcha
   });
 
   it("AT-QTY-007: Nut now carries its own quantity-break schedule (previously had none at all) — unified across grades, discount-only", () => {
+    // Rule-level: 1-400 is 0% and 4001-6000 is -25%.
+    const small = resolveAdjustmentRule(ctx, { costingRoute: "Custom Production", ruleGroup: "Quantity", scope: "Nut", value: 400 });
+    const large = resolveAdjustmentRule(ctx, { costingRoute: "Custom Production", ruleGroup: "Quantity", scope: "Nut", value: 5000 });
+    expect(small?.rule.adjustmentValue).toBeCloseTo(0, 6);
+    expect(large?.rule.adjustmentValue).toBeCloseTo(-0.25, 6);
+  });
+
+  it("AT-MINPRICE-005: on a nut cheap enough to sit under the floor, the minimum price overrides the volume discount entirely", () => {
+    // Business consequence worth pinning: for low-value items the quantity
+    // break stops being visible in the price, because both tiers clamp to the
+    // same floor. Pricing a big order of small nuts is floor-driven, not
+    // discount-driven.
     const small = calculateCustomLine(ctx, { ...nutBase, qty: 400, leadTimeDays: null });
     const large = calculateCustomLine(ctx, { ...nutBase, qty: 5000, leadTimeDays: null });
-    expect(small.basePricePerItem).toBeCloseTo(large.basePricePerItem / 0.75, 4); // 1-400 (0%) vs 4001-6000 (-25%)
+    expect(small.basePricePerItem).toBe(12500);
+    expect(large.basePricePerItem).toBe(12500);
   });
 });
 
@@ -820,8 +905,9 @@ describe("AT-COATING-001: coating price = costing weight x rate, before order-we
       materialSizeGuides: [],
       pricePerKg: [],
       coatingPriceGuides: [
-        { coatingRuleId: "coat-1", processName: "TESTCOAT", itemScope: "all", minDiameterMm: null, basis: "IDR_per_kg", rate: 10000 },
+        { coatingRuleId: "coat-1", processName: "TESTCOAT", displayLabel: null, itemScope: "all", minDiameterMm: null, basis: "IDR_per_kg", rate: 10000 },
       ],
+      minimumPrices: [],
       adjustmentRules: [], // no order-weight bracket defined -> factor stays at 1 (unscaled)
       tradingItems: [],
       tradingPriceTiers: [],

@@ -10,6 +10,7 @@ import {
   resolvePricePerKg,
   resolveAdjustmentRule,
   resolveDiesCost,
+  resolveMinimumPrice,
 } from "./resolvers";
 import { evaluateFormula } from "./formulaDsl";
 import { getConfigNumber } from "./appConfig";
@@ -130,6 +131,18 @@ const NUT_LEAD_TIME_STAINLESS = new Set([
   "SS310",
 ]);
 
+/**
+ * Stainless vs Non-Stainless for one grade, reusing the same grade sets the
+ * Lead Time and Quantity cards already classify by — CBP's minimum-price card
+ * splits on exactly this axis, so a second, independently-maintained list of
+ * stainless grades would be a source of silent drift.
+ */
+export function materialClassFor(productFamily: string, gradeOrSpec: string): "Stainless" | "Non-Stainless" {
+  const g = gradeOrSpec.trim().toUpperCase();
+  const stainless = productFamily === "Nut" ? NUT_LEAD_TIME_STAINLESS.has(g) : BOLT_STAINLESS_GRADES.has(g);
+  return stainless ? "Stainless" : "Non-Stainless";
+}
+
 function nutLeadTimeScope(gradeOrSpec: string): string {
   const g = gradeOrSpec.trim().toUpperCase();
   if (NUT_LEAD_TIME_STAINLESS.has(g)) return "Nut|Stainless";
@@ -243,6 +256,16 @@ export function calculateCustomLine(ctx: GuideContext, input: CustomLineInput): 
       basePricePerItem *= 1 + lengthAdj.rule.adjustmentValue;
       refs.push(lengthAdj.ref);
     }
+  }
+
+  // CBP's minimum selling price is a floor on the item itself, applied after
+  // every quantity/lead-time/length adjustment but BEFORE coating and dies are
+  // added (confirmed 2026-08-25) — so a coated cheap item clears the floor on
+  // its own merits and then still pays for its coating on top.
+  const minimum = resolveMinimumPrice(ctx, input.productFamily, materialClassFor(input.productFamily, input.gradeOrSpec));
+  if (minimum && basePricePerItem < minimum.minimumPrice) {
+    basePricePerItem = minimum.minimumPrice;
+    refs.push(minimum.ref);
   }
 
   const coating = computeCoatingPrice(ctx, {

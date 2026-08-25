@@ -104,6 +104,22 @@ export function resolveDiesCost(
   return { cost: best.cost, ref: { table: "dies_cost_guides", id: best.diesCostId } };
 }
 
+/**
+ * CBP's minimum selling price per item ("minimum harga"), keyed by product
+ * family and Stainless/Non-Stainless. Returns null when no floor is published
+ * for that combination — families without a card (Washer, Stud/Anchor) simply
+ * have no floor, which must not be confused with a floor of zero.
+ */
+export function resolveMinimumPrice(
+  ctx: GuideContext,
+  productFamily: string,
+  materialClass: "Stainless" | "Non-Stainless",
+): { minimumPrice: number; ref: ResolvedRuleRef } | null {
+  const row = ctx.minimumPrices.find((m) => m.productFamily === productFamily && m.materialClass === materialClass);
+  if (!row) return null;
+  return { minimumPrice: row.minimumPrice, ref: { table: "minimum_prices", id: row.minimumPriceId } };
+}
+
 /** 06_RULE_ENGINE step 5: width_corner when present, otherwise width_flat x 1.154. */
 export function resolveEffectiveWidthCorner(sizeGuide: MaterialSizeGuideRow): number {
   if (sizeGuide.widthCorner !== null) return sizeGuide.widthCorner;

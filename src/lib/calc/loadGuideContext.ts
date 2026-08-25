@@ -10,6 +10,7 @@ import type {
   MaterialSizeGuideRow,
   PricePerKgRow,
   CoatingPriceGuideRow,
+  MinimumPriceRow,
   AdjustmentRuleRow,
   TradingItemRow,
   TradingPriceTierRow,
@@ -35,6 +36,7 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
     materialSizeGuides,
     pricePerKg,
     coatingPriceGuides,
+    minimumPrices,
     adjustmentRules,
     tradingItems,
     tradingPriceTiers,
@@ -99,9 +101,14 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
        FROM price_per_kg WHERE guide_version_id = $1 AND active`,
       [guideVersionId],
     ),
-    pool.query<{ coating_rule_id: string; process_name: string; item_scope: string | null; min_diameter_mm: string | null; basis: string; rate: string }>(
-      `SELECT coating_rule_id, process_name, item_scope, min_diameter_mm, basis, rate
+    pool.query<{ coating_rule_id: string; process_name: string; display_label: string | null; item_scope: string | null; min_diameter_mm: string | null; basis: string; rate: string }>(
+      `SELECT coating_rule_id, process_name, display_label, item_scope, min_diameter_mm, basis, rate
        FROM coating_price_guides WHERE guide_version_id = $1 AND active`,
+      [guideVersionId],
+    ),
+    pool.query<{ minimum_price_id: string; product_family: string; material_class: string; minimum_price: string }>(
+      `SELECT minimum_price_id, product_family, material_class, minimum_price
+       FROM minimum_prices WHERE guide_version_id = $1 AND active`,
       [guideVersionId],
     ),
     pool.query<{
@@ -217,10 +224,19 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
       (r): CoatingPriceGuideRow => ({
         coatingRuleId: r.coating_rule_id,
         processName: r.process_name,
+        displayLabel: r.display_label,
         itemScope: r.item_scope,
         minDiameterMm: num(r.min_diameter_mm),
         basis: r.basis,
         rate: Number(r.rate),
+      }),
+    ),
+    minimumPrices: minimumPrices.rows.map(
+      (r): MinimumPriceRow => ({
+        minimumPriceId: r.minimum_price_id,
+        productFamily: r.product_family,
+        materialClass: r.material_class as MinimumPriceRow["materialClass"],
+        minimumPrice: Number(r.minimum_price),
       }),
     ),
     adjustmentRules: adjustmentRules.rows.map(

@@ -45,6 +45,12 @@ export async function buildGuidePackageXlsx(opts: BuildOptions): Promise<Buffer>
       ["dies_cost_guide_id", "product_family", "product_profile", "size_label", "diameter_mm", "cost", "currency", "active"],
       ["DIES-BOLT-HEAVYHEX-1", "Bolt", "Heavy Hex", "1", 25.4, 5300000, "IDR", true],
     ],
+    Minimum_Prices: [
+      ["minimum_price_id", "product_family", "material_class", "minimum_price", "currency", "active"],
+      // Well below the fixture's computed Bolt price, so the floor never
+      // silently rewrites the SIM-BOLT-QTY-30 golden values below.
+      ["MINP-BOLT-NONSS", "Bolt", "Non-Stainless", 1000, "IDR", true],
+    ],
     Material_Grade_Map: [
       ["material_grade_map_id", "material_id", "product_family", "grade_or_spec", "notes", "active"],
       ["MGM-BOLT-A325", "MAT-SCM440", "Bolt", "A325", "", true],

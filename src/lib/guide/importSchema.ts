@@ -167,6 +167,21 @@ export const TAB_SPECS: TabSpec[] = [
     uniqueBusinessKey: ["product_family", "grade_or_spec", "size_label"],
   },
   {
+    tabName: "Minimum_Prices",
+    table: "minimum_prices",
+    idColumn: "minimum_price_id",
+    idPrefix: "minp",
+    keyHeader: "minimum_price_id",
+    columns: [
+      { header: "product_family", dbColumn: "product_family", type: "string", required: true },
+      { header: "material_class", dbColumn: "material_class", type: "string", required: true },
+      { header: "minimum_price", dbColumn: "minimum_price", type: "number", required: true },
+      { header: "currency", dbColumn: "currency", type: "string", required: false },
+      activeCol,
+    ],
+    uniqueBusinessKey: ["product_family", "material_class"],
+  },
+  {
     tabName: "Coating_Guides",
     table: "coating_price_guides",
     idColumn: "coating_rule_id",
@@ -175,6 +190,7 @@ export const TAB_SPECS: TabSpec[] = [
     columns: [
       { header: "process_group", dbColumn: "process_group", type: "string", required: true },
       { header: "process_name", dbColumn: "process_name", type: "string", required: true },
+      { header: "display_label", dbColumn: "display_label", type: "string", required: false },
       { header: "item_scope", dbColumn: "item_scope", type: "string", required: false },
       { header: "size_label", dbColumn: "size_label", type: "string", required: false },
       { header: "min_diameter_mm", dbColumn: "min_diameter_mm", type: "number", required: false },

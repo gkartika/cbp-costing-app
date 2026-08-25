@@ -105,7 +105,8 @@ type Lookups = {
   gradeToProfile: Record<string, Record<string, string>>;
   sizesByProfile: Record<string, { sizeLabel: string; diameterMm: number | null }[]>;
   coatingCodes: string[];
-  leadTimeBucketsByScope: Record<string, { label: string; value: number; ruleId: string }[]>;
+  coatingLabels: Record<string, string>;
+  leadTimeBucketsByFamily: Record<string, { label: string; value: number; ruleId: string }[]>;
   tradingItemsByCategory: Record<string, { tradingItemId: string; sizeLabel: string }[]>;
   threadConditionsByFamily: Record<string, string[]>;
   defaultWeightTolerancePercent: number;
@@ -119,7 +120,8 @@ const EMPTY_LOOKUPS: Lookups = {
   gradeToProfile: {},
   sizesByProfile: {},
   coatingCodes: [],
-  leadTimeBucketsByScope: {},
+  coatingLabels: {},
+  leadTimeBucketsByFamily: {},
   tradingItemsByCategory: {},
   threadConditionsByFamily: {},
   defaultWeightTolerancePercent: 0,
@@ -168,12 +170,37 @@ function lineToForm(l: Line): LineForm {
 }
 
 /**
+ * CBP's standard item description, used when the user leaves Description
+ * blank so every quotation line reads consistently:
+ *   Bolt — "Bolt, A193-B7, HT M20x80"
+ *   Nut  — "Nut, A194-2H, M20"
+ * Uses the grade's display label (A193-B7, not B7) so the quotation shows the
+ * full standard designation. Returns "" for families with no agreed format,
+ * leaving the existing "family + grade" fallback in the summary untouched.
+ */
+function defaultDescription(f: LineForm, gradeLabel: string): string {
+  const grade = gradeLabel || f.gradeInput;
+  const size = f.sizeLabel || (f.diameterMm ? `M${f.diameterMm}` : "");
+  if (!f.productFamily || !grade || !size) return "";
+
+  if (f.productFamily === "Bolt") {
+    const thread = f.threadCondition ? `${f.threadCondition} ` : "";
+    const length = f.lengthMm ? `x${f.lengthMm}` : "";
+    return `${f.productFamily}, ${grade}, ${thread}${size}${length}`;
+  }
+  if (f.productFamily === "Nut") {
+    return `${f.productFamily}, ${grade}, ${size}`;
+  }
+  return "";
+}
+
+/**
  * On create, an empty field simply means "not set yet" — omit it. On edit,
  * an empty field means the user actively cleared it, so it must be sent as
  * `null` or the stale value survives server-side (e.g. a leftover
  * developedCutLengthMm silently rerouting a Stud line to the Anchor formula).
  */
-function formToBody(f: LineForm, mode: "add" | "edit"): Record<string, unknown> {
+function formToBody(f: LineForm, mode: "add" | "edit", gradeLabel = ""): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   const set = (key: string, raw: string, parse: (s: string) => unknown = (s) => s) => {
     if (raw) {
@@ -185,7 +212,9 @@ function formToBody(f: LineForm, mode: "add" | "edit"): Record<string, unknown> 
 
   set("route", f.route);
   set("productFamily", f.productFamily);
-  set("description", f.description);
+  // A blank Description falls back to CBP's standard format rather than
+  // staying empty, so the quotation never ships an unlabelled line.
+  set("description", f.description || defaultDescription(f, gradeLabel));
   set("gradeInput", f.gradeInput);
   set("threadCondition", f.threadCondition);
   set("sizeLabel", f.sizeLabel);
@@ -333,13 +362,14 @@ export function Workspace(props: {
     setSaveStatus("saving");
     setError(null);
     try {
+      const gradeLabel = gradeLabelFor(form.productFamily, form.gradeInput) ?? "";
       if (panel.mode === "add") {
-        await apiPost(`/api/costings/${costing.costingId}/lines`, formToBody(form, "add"));
+        await apiPost(`/api/costings/${costing.costingId}/lines`, formToBody(form, "add", gradeLabel));
       } else if (panel.mode === "edit" && panel.lineId) {
         const line = lines.find((l) => l.costingLineId === panel.lineId)!;
         await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
           expectedUpdatedAt: line.updatedAt,
-          ...formToBody(form, "edit"),
+          ...formToBody(form, "edit", gradeLabel),
         });
       }
       setPanel({ mode: "closed" });
@@ -546,7 +576,7 @@ export function Workspace(props: {
   const availableSizes = resolvedProfile ? (lookups.sizesByProfile[resolvedProfile] ?? []) : [];
   const availableThreadConditions = form.productFamily ? (lookups.threadConditionsByFamily[form.productFamily] ?? []) : [];
   const leadTimeScope = resolveTypeLabelForLeadTime(form);
-  const availableLeadTimes = leadTimeScope ? (lookups.leadTimeBucketsByScope[leadTimeScope] ?? []) : [];
+  const availableLeadTimes = leadTimeScope ? (lookups.leadTimeBucketsByFamily[leadTimeScope] ?? []) : [];
   const availableTradingItems = form.productFamily ? (lookups.tradingItemsByCategory[form.productFamily] ?? []) : [];
 
   return (
@@ -1049,10 +1079,11 @@ export function Workspace(props: {
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Coating code</span>
             <select value={form.coatingCode} onChange={(e) => setForm({ ...form, coatingCode: e.target.value })}>
-              <option value="">None</option>
+              {/* No coating is quoted as "Plain"; the empty value is what the engine sees. */}
+              <option value="">Plain</option>
               {lookups.coatingCodes.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {lookups.coatingLabels[c] ?? c}
                 </option>
               ))}
             </select>

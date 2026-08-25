@@ -65,10 +65,20 @@ export type PricePerKgRow = {
 export type CoatingPriceGuideRow = {
   coatingRuleId: string;
   processName: string;
+  /** Human-facing name for display only (e.g. "Zinc" for process_name "Dies"). Never a matching key. */
+  displayLabel: string | null;
   itemScope: string | null;
   minDiameterMm: number | null;
   basis: string;
   rate: number;
+};
+
+/** Selling-price floor per item, keyed by family + Stainless/Non-Stainless (CBP "minimum harga"). */
+export type MinimumPriceRow = {
+  minimumPriceId: string;
+  productFamily: string;
+  materialClass: "Stainless" | "Non-Stainless";
+  minimumPrice: number;
 };
 
 export type AdjustmentRuleRow = {
@@ -128,6 +138,7 @@ export type GuideContext = {
   materialSizeGuides: MaterialSizeGuideRow[];
   pricePerKg: PricePerKgRow[];
   coatingPriceGuides: CoatingPriceGuideRow[];
+  minimumPrices: MinimumPriceRow[];
   adjustmentRules: AdjustmentRuleRow[];
   tradingItems: TradingItemRow[];
   tradingPriceTiers: TradingPriceTierRow[];

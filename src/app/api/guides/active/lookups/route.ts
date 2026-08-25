@@ -6,6 +6,15 @@ import { loadGuideContext } from "@/lib/calc/loadGuideContext";
 import { getConfigNumber } from "@/lib/calc/appConfig";
 
 /**
+ * Lead time shown the way CBP quotes it: whole weeks as "N minggu", anything
+ * else as "N hari". Pure formatting of the day count that already lives in the
+ * rate card — the surcharge itself stays versioned master data.
+ */
+function formatLeadTime(days: number): string {
+  return days >= 14 && days % 7 === 0 ? `${days / 7} minggu` : `${days} hari`;
+}
+
+/**
  * Read-only, guide-version-scoped option lists for the Workspace's dropdown
  * fields (grade, size, coating code, lead time, trading item). Every value
  * returned here is projected from the active Published guide's own master
@@ -25,7 +34,8 @@ export const GET = apiHandler(async () => {
       gradeToProfile: {},
       sizesByProfile: {},
       coatingCodes: [],
-      leadTimeBucketsByScope: {},
+      coatingLabels: {},
+      leadTimeBucketsByFamily: {},
       tradingItemsByCategory: {},
       threadConditionsByFamily: {},
       defaultWeightTolerancePercent: 0,
@@ -70,8 +80,20 @@ export const GET = apiHandler(async () => {
   }
 
   const coatingCodes = Array.from(new Set(ctx.coatingPriceGuides.map((c) => c.processName))).sort();
+  // process_name -> human-facing name (e.g. "Dies" -> "Zinc"). The code stays
+  // the matching key; only the label changes, same split as grade labels.
+  const coatingLabels: Record<string, string> = {};
+  for (const c of ctx.coatingPriceGuides) {
+    coatingLabels[c.processName] = c.displayLabel ?? c.processName;
+  }
 
-  const leadTimeBucketsByScope: Record<string, { label: string; value: number; ruleId: string }[]> = {};
+  // Keyed by product family, NOT by the engine's tiered scope. Lead Time rules
+  // are scoped "Bolt|CarbonHigh", "Nut|Stainless" and so on, but the day menu
+  // is identical across a family's tiers — only the surcharge differs, and the
+  // engine picks the tier itself from the grade at calculation time. Keying by
+  // scope meant the client (which only knows the family) never matched a key,
+  // so the dropdown silently fell back to a free-text day box.
+  const leadTimeBucketsByFamily: Record<string, { label: string; value: number; ruleId: string }[]> = {};
   for (const rule of ctx.adjustmentRules) {
     if (rule.ruleGroup !== "Lead Time") continue;
     const min = rule.thresholdMin;
@@ -79,14 +101,12 @@ export const GET = apiHandler(async () => {
     // A representative value guaranteed to fall inside this rule's own range,
     // regardless of whether the minimum boundary itself is inclusive.
     const value = rule.minInclusive ? min : min + 1;
-    const label =
-      rule.thresholdMax === null
-        ? `${value}+ days`
-        : `${rule.thresholdMin}–${rule.thresholdMax} days`;
-    const list = leadTimeBucketsByScope[rule.scope] ?? (leadTimeBucketsByScope[rule.scope] = []);
-    list.push({ label, value, ruleId: rule.adjustmentRuleId });
+    const family = rule.scope.split("|")[0];
+    const list = leadTimeBucketsByFamily[family] ?? (leadTimeBucketsByFamily[family] = []);
+    if (list.some((b) => b.value === value)) continue;
+    list.push({ label: formatLeadTime(value), value, ruleId: rule.adjustmentRuleId });
   }
-  Object.values(leadTimeBucketsByScope).forEach((list) => list.sort((a, b) => a.value - b.value));
+  Object.values(leadTimeBucketsByFamily).forEach((list) => list.sort((a, b) => a.value - b.value));
 
   const tradingItemsByCategory: Record<string, { tradingItemId: string; sizeLabel: string }[]> = {};
   for (const item of ctx.tradingItems) {
@@ -94,16 +114,23 @@ export const GET = apiHandler(async () => {
     list.push({ tradingItemId: item.tradingItemId, sizeLabel: item.sizeLabel });
   }
 
-  // Only Bolt currently prices HT/FT separately; other families' price rows
-  // carry no thread_condition, so this list stays empty for them and the
-  // Workspace hides the dropdown rather than offering a no-op choice.
+  // Thread condition is only a real choice where the guide actually prices two
+  // or more of them at the same grade+size — today that is Bolt (HT vs FT).
+  // Nut carries a single placeholder "NA" and Stud/Anchor a single "FT", which
+  // the engine never discriminates on, so offering those as a one-item dropdown
+  // just invited the user to set a field that changes nothing. Derived from the
+  // data rather than hardcoding "Bolt", so a future family that genuinely
+  // prices two conditions starts offering the choice on its own.
   const threadConditionsByFamily: Record<string, string[]> = {};
   for (const price of ctx.pricePerKg) {
     if (!price.threadCondition) continue;
     const list = threadConditionsByFamily[price.productFamily] ?? (threadConditionsByFamily[price.productFamily] = []);
     if (!list.includes(price.threadCondition)) list.push(price.threadCondition);
   }
-  Object.values(threadConditionsByFamily).forEach((list) => list.sort());
+  for (const [family, list] of Object.entries(threadConditionsByFamily)) {
+    if (list.length < 2) delete threadConditionsByFamily[family];
+    else list.sort();
+  }
 
   return NextResponse.json({
     guideVersionId,
@@ -113,7 +140,8 @@ export const GET = apiHandler(async () => {
     gradeToProfile,
     sizesByProfile,
     coatingCodes,
-    leadTimeBucketsByScope,
+    coatingLabels,
+    leadTimeBucketsByFamily,
     tradingItemsByCategory,
     threadConditionsByFamily,
     defaultWeightTolerancePercent: getConfigNumber(ctx, "CUSTOM_WEIGHT_TOLERANCE"),

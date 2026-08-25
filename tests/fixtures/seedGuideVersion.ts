@@ -31,6 +31,7 @@ export async function seedGuideVersion(versionCode: string): Promise<string> {
   await insertMaterials(guideVersionId);
   await insertRawBarStock(guideVersionId);
   await insertDiesCostGuides(guideVersionId);
+  await insertMinimumPrices(guideVersionId);
   await insertMaterialGradeMap(guideVersionId);
   await insertGradeProfileRules(guideVersionId);
   await insertGradePriceAliases(guideVersionId);
@@ -127,6 +128,35 @@ async function insertDiesCostGuides(gv: string) {
       `INSERT INTO dies_cost_guides (dies_cost_id, guide_version_id, source_key, product_family, product_profile, size_label, diameter_mm, cost)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [generateId("dies"), gv, `DIES-${productFamily}-${productProfile}-${sizeLabel}`.replace(/\s+/g, ""), productFamily, productProfile, sizeLabel, diameterMm, cost],
+    );
+  }
+}
+
+/**
+ * CBP's real minimum-harga card (2026-08-25, DEC-050). The Bolt/Non-Stainless
+ * floor of 15,000 sits below every existing golden fixture's computed price,
+ * so adding this table does not move any pre-existing expected value; the
+ * AT-MINPRICE-* tests drive the floor explicitly with a tiny qty instead.
+ */
+async function insertMinimumPrices(gv: string) {
+  const rows: [string, string, number][] = [
+    ["Bolt", "Non-Stainless", 15_000],
+    ["Bolt", "Stainless", 23_500],
+    ["Nut", "Non-Stainless", 12_500],
+    ["Nut", "Stainless", 18_000],
+  ];
+  for (const [productFamily, materialClass, minimumPrice] of rows) {
+    await pool.query(
+      `INSERT INTO minimum_prices (minimum_price_id, guide_version_id, source_key, product_family, material_class, minimum_price)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        generateId("minp"),
+        gv,
+        `MINP-${productFamily.toUpperCase()}-${materialClass.toUpperCase()}`,
+        productFamily,
+        materialClass,
+        minimumPrice,
+      ],
     );
   }
 }
