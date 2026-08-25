@@ -16,7 +16,7 @@ export const GET = apiHandler(async () => {
   policy.canViewCosting(user);
 
   const { rows } = await pool.query<CostingHeaderRow>(
-    `SELECT * FROM costing_headers ORDER BY created_at DESC LIMIT 200`,
+    `SELECT * FROM costing_headers WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 200`,
   );
   return NextResponse.json({ costings: rows.map((r) => serializeCosting(r, user.userId)) });
 });

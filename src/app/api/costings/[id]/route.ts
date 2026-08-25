@@ -34,7 +34,7 @@ async function assertAuthorized(
 
 async function loadCosting(costingId: string): Promise<CostingHeaderRow> {
   const { rows } = await pool.query<CostingHeaderRow>(
-    `SELECT * FROM costing_headers WHERE costing_id = $1`,
+    `SELECT * FROM costing_headers WHERE costing_id = $1 AND deleted_at IS NULL`,
     [costingId],
   );
   if (rows.length === 0) throw Errors.notFound("Costing");
@@ -151,4 +151,44 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
   });
 
   return NextResponse.json(serializeCosting(after, user.userId));
+});
+
+/**
+ * Soft-deletes a Draft/Calculated costing so it leaves the dashboard without
+ * leaving the audit trail: audit_events and snapshots keep referencing this id,
+ * and DEC-004's reconstructable-history guarantee depends on the row surviving.
+ * Finalized/Revised costings are never deletable — those are Voided instead.
+ */
+export const DELETE = apiHandler(async (req: NextRequest, ctx) => {
+  const user = await requireUser();
+  const requestId = getRequestId(req);
+  const { id } = await ctx.params;
+
+  const before = await loadCosting(id);
+  await assertAuthorized(
+    () => policy.assertCanDeleteCosting(user, { ownerUserId: before.owner_user_id, status: before.status }),
+    { entityId: id, actorUserId: user.userId, actorRole: primaryAuditRole(user), requestId, action: "COSTING_DELETE" },
+  );
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE costing_headers SET deleted_at = now(), deleted_by = $1, updated_at = now()
+       WHERE costing_id = $2 AND deleted_at IS NULL`,
+      [user.userId, id],
+    );
+    await writeAuditEvent(
+      {
+        action: "COSTING_DELETED",
+        entityType: "costing_headers",
+        entityId: id,
+        actorUserId: user.userId,
+        actorRole: primaryAuditRole(user),
+        requestId,
+        beforeJson: { status: before.status, quotationNo: before.quotation_no },
+      },
+      client,
+    );
+  });
+
+  return NextResponse.json({ ok: true });
 });

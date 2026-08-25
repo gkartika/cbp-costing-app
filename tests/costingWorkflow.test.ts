@@ -314,6 +314,108 @@ describe("AT-SIZE-001: an Inch-size line calculates using its real size_label, n
   });
 });
 
+describe("AT-DELETE-001/002: dashboard soft delete", () => {
+  it("removes a Draft costing from every read path while retaining the row and its audit trail", async () => {
+    await createUser({ username: "del_user_001", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("del_user_001", PASSWORD);
+    const { costingId } = await createCostingWithBoltLine(cookie);
+
+    const del = await apiFetch(`/api/costings/${costingId}`, { method: "DELETE", cookie });
+    expect(del.status).toBe(200);
+
+    // Gone from the list and unreachable directly...
+    const list = await apiFetch("/api/costings", { cookie });
+    expect((list.json.costings as { costingId: string }[]).some((c) => c.costingId === costingId)).toBe(false);
+    const direct = await apiFetch(`/api/costings/${costingId}`, { cookie });
+    expect(direct.status).toBe(404);
+
+    // ...but the row itself survives, which is the whole point of soft delete:
+    // audit_events reference this id and must stay resolvable.
+    const row = await pool.query(`SELECT deleted_at FROM costing_headers WHERE costing_id = $1`, [costingId]);
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0].deleted_at).not.toBeNull();
+
+    const audit = await pool.query(
+      `SELECT 1 FROM audit_events WHERE action = 'COSTING_DELETED' AND entity_id = $1`,
+      [costingId],
+    );
+    expect(audit.rows).toHaveLength(1);
+  });
+
+  it("refuses to delete a finalized costing — that case is Void, not delete", async () => {
+    await createUser({ username: "del_user_002", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("del_user_002", PASSWORD);
+    const { costingId } = await createCostingWithBoltLine(cookie);
+    await apiFetch(`/api/costings/${costingId}/calculate`, { method: "POST", cookie });
+    const calculated = await apiFetch(`/api/costings/${costingId}`, { cookie });
+    await apiFetch(`/api/costings/${costingId}/finalize`, {
+      method: "POST",
+      cookie,
+      body: { expectedUpdatedAt: calculated.json.updatedAt },
+    });
+
+    const del = await apiFetch(`/api/costings/${costingId}`, { method: "DELETE", cookie });
+    expect(del.status).toBe(409);
+    expect((del.json.error as { code: string }).code).toBe("COSTING_LOCKED");
+  });
+
+  it("refuses to delete another user's costing", async () => {
+    await createUser({ username: "del_owner_003", password: PASSWORD, roles: ["costing_user"] });
+    await createUser({ username: "del_other_003", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie: ownerCookie } = await login("del_owner_003", PASSWORD);
+    const { costingId } = await createCostingWithBoltLine(ownerCookie);
+
+    const { cookie: otherCookie } = await login("del_other_003", PASSWORD);
+    const del = await apiFetch(`/api/costings/${costingId}`, { method: "DELETE", cookie: otherCookie });
+    expect(del.status).toBe(403);
+    expect((del.json.error as { code: string }).code).toBe("COSTING_READ_ONLY");
+  });
+});
+
+describe("AT-PO-001/002: PO conversion tracking", () => {
+  it("can be marked on a FINALIZED costing — the locked state is exactly when a PO arrives", async () => {
+    await createUser({ username: "po_user_001", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("po_user_001", PASSWORD);
+    const { costingId } = await createCostingWithBoltLine(cookie);
+    await apiFetch(`/api/costings/${costingId}/calculate`, { method: "POST", cookie });
+    const calculated = await apiFetch(`/api/costings/${costingId}`, { cookie });
+    await apiFetch(`/api/costings/${costingId}/finalize`, {
+      method: "POST",
+      cookie,
+      body: { expectedUpdatedAt: calculated.json.updatedAt },
+    });
+
+    const marked = await apiFetch(`/api/costings/${costingId}/po`, { method: "POST", cookie, body: { isPo: true } });
+    expect(marked.status).toBe(200);
+    expect(marked.json.isPo).toBe(true);
+
+    // Marking a PO must not disturb the costing's own state or recalculation
+    // status — it is commercial tracking, not a calculation input.
+    const after = await apiFetch(`/api/costings/${costingId}`, { cookie });
+    expect(after.json.status).toBe("finalized");
+
+    const unmarked = await apiFetch(`/api/costings/${costingId}/po`, { method: "POST", cookie, body: { isPo: false } });
+    expect(unmarked.json.isPo).toBe(false);
+
+    const audit = await pool.query(
+      `SELECT action FROM audit_events WHERE entity_id = $1 AND action IN ('COSTING_MARKED_PO', 'COSTING_UNMARKED_PO') ORDER BY occurred_at`,
+      [costingId],
+    );
+    expect(audit.rows.map((r) => r.action)).toEqual(["COSTING_MARKED_PO", "COSTING_UNMARKED_PO"]);
+  });
+
+  it("refuses a non-owner who is not Super Admin", async () => {
+    await createUser({ username: "po_owner_002", password: PASSWORD, roles: ["costing_user"] });
+    await createUser({ username: "po_other_002", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie: ownerCookie } = await login("po_owner_002", PASSWORD);
+    const { costingId } = await createCostingWithBoltLine(ownerCookie);
+
+    const { cookie: otherCookie } = await login("po_other_002", PASSWORD);
+    const res = await apiFetch(`/api/costings/${costingId}/po`, { method: "POST", cookie: otherCookie, body: { isPo: true } });
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("Super Admin: void and reassign", () => {
   it("only Super Admin can void a finalized costing, and only with a reason", async () => {
     await createUser({ username: "owner_void_001", password: PASSWORD, roles: ["costing_user"] });

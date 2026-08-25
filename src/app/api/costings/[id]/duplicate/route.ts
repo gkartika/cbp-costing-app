@@ -20,7 +20,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
   const { id } = await ctx.params;
 
   const { rows } = await pool.query<CostingHeaderRow>(
-    `SELECT * FROM costing_headers WHERE costing_id = $1`,
+    `SELECT * FROM costing_headers WHERE costing_id = $1 AND deleted_at IS NULL`,
     [id],
   );
   if (rows.length === 0) throw Errors.notFound("Costing");

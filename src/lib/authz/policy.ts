@@ -54,6 +54,35 @@ export const policy = {
     }
   },
 
+  /**
+   * Deleting is a stricter form of editing: only the owner, and only while the
+   * costing is still Draft/Calculated. Once a quotation number is issued the
+   * record must survive — Void is the reason-bearing act for that case.
+   */
+  assertCanDeleteCosting(user: SessionUser, costing: { ownerUserId: string; status: string }): void {
+    if (costing.ownerUserId !== user.userId) {
+      throw Errors.costingReadOnly();
+    }
+    if (costing.status !== "draft" && costing.status !== "calculated") {
+      throw Errors.costingLocked();
+    }
+  },
+
+  /**
+   * The PO flag is commercial tracking layered on top of a quotation, not part
+   * of the costing itself, so unlike every other mutation it stays available
+   * after finalization — that is precisely when a PO can arrive. Owner or
+   * Super Admin may set it; a voided costing never converts.
+   */
+  assertCanMarkPo(user: SessionUser, costing: { ownerUserId: string; status: string }): void {
+    if (costing.ownerUserId !== user.userId && !hasRole(user, ROLES.SUPER_ADMIN)) {
+      throw Errors.costingReadOnly();
+    }
+    if (costing.status === "voided") {
+      throw Errors.costingLocked();
+    }
+  },
+
   assertIsSuperAdmin(user: SessionUser): void {
     if (!hasRole(user, ROLES.SUPER_ADMIN)) {
       throw Errors.forbidden();

@@ -17,6 +17,8 @@ export type CostingHeaderRow = {
   updated_at: Date;
   finalized_at: Date | null;
   voided_at: Date | null;
+  deleted_at: Date | null;
+  is_po: boolean;
 };
 
 export function serializeCosting(row: CostingHeaderRow, currentUserId: string) {
@@ -40,6 +42,10 @@ export function serializeCosting(row: CostingHeaderRow, currentUserId: string) {
     updatedAt: row.updated_at,
     finalizedAt: row.finalized_at,
     voidedAt: row.voided_at,
+    deletedAt: row.deleted_at,
+    isPo: row.is_po,
     canEdit: editableStatus && row.owner_user_id === currentUserId,
+    /** Only unissued work can be deleted; a finalized quotation is voided instead. */
+    canDelete: editableStatus && row.owner_user_id === currentUserId,
   };
 }
