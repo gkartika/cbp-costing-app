@@ -9,7 +9,11 @@ import { loadCostingHeader } from "@/lib/costings/loadCosting";
 import { serializeCosting, type CostingHeaderRow } from "@/lib/costings/types";
 import { Errors } from "@/lib/errors";
 
-const MarkPoSchema = z.object({ isPo: z.boolean() });
+const MarkPoSchema = z.object({
+  isPo: z.boolean(),
+  /** Required when marking; ignored when clearing. */
+  poNumber: z.string().trim().min(1).max(100).optional(),
+});
 
 /**
  * Marks whether an issued quotation converted into a purchase order.
@@ -32,7 +36,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
   policy.assertCanMarkPo(user, { ownerUserId: before.owner_user_id, status: before.status });
 
   const isPo = body.data.isPo;
-  if (isPo === before.is_po) {
+  const poNumber = body.data.poNumber?.trim() ?? null;
+
+  // The customer's PO number is the confirmation step: requiring a real
+  // document reference is what stops a stray click on the checkbox from
+  // recording a win that never happened.
+  if (isPo && !poNumber) throw Errors.poNumberRequired();
+
+  if (isPo === before.is_po && (!isPo || poNumber === before.po_number)) {
     return NextResponse.json(serializeCosting(before, user.userId));
   }
 
@@ -40,11 +51,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
     const { rows } = await client.query<CostingHeaderRow>(
       `UPDATE costing_headers
          SET is_po = $1,
+             po_number = CASE WHEN $1 THEN $2::text ELSE NULL END,
              po_marked_at = CASE WHEN $1 THEN now() ELSE NULL END,
-             po_marked_by = CASE WHEN $1 THEN $2::text ELSE NULL END
-       WHERE costing_id = $3
+             po_marked_by = CASE WHEN $1 THEN $3::text ELSE NULL END
+       WHERE costing_id = $4
        RETURNING *`,
-      [isPo, user.userId, id],
+      [isPo, poNumber, user.userId, id],
     );
 
     // Deliberately does not touch updated_at: marking a PO is commercial
@@ -58,9 +70,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
         actorUserId: user.userId,
         actorRole: primaryAuditRole(user),
         requestId,
-        beforeJson: { isPo: before.is_po },
-        afterJson: { isPo },
-        changedFields: ["isPo"],
+        beforeJson: { isPo: before.is_po, poNumber: before.po_number },
+        afterJson: { isPo, poNumber: isPo ? poNumber : null },
+        changedFields: ["isPo", "poNumber"],
       },
       client,
     );

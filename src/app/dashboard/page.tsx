@@ -6,6 +6,19 @@ import { NewCostingForm } from "./NewCostingForm";
 import { LogoutButton } from "./LogoutButton";
 import { CostingTable, type DashboardCosting } from "./CostingTable";
 
+/**
+ * Timestamps are stored UTC and displayed in Asia/Jakarta (04_DATA_MODEL).
+ * Pinning both locale and zone here also keeps the string identical between
+ * the server render and the browser, which a bare toLocaleDateString() does
+ * not — that mismatch is a React hydration error.
+ */
+const JAKARTA_DATE = new Intl.DateTimeFormat("id-ID", {
+  timeZone: "Asia/Jakarta",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
 export default async function DashboardPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
@@ -48,10 +61,10 @@ export default async function DashboardPage() {
       customerName: s.customerName,
       status: s.status,
       isPo: s.isPo,
+      poNumber: s.poNumber,
       ownerName: r.owner_name ?? r.owner_user_id,
       isOwnedByMe: r.owner_user_id === user.userId,
-      createdAt: r.created_at.toISOString(),
-      updatedAt: r.updated_at.toISOString(),
+      createdAtLabel: JAKARTA_DATE.format(r.created_at),
       totalNominal: r.total_nominal !== null ? Number(r.total_nominal) : null,
       canEdit: s.canEdit,
       canDelete: s.canDelete,

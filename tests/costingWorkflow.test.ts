@@ -385,17 +385,30 @@ describe("AT-PO-001/002: PO conversion tracking", () => {
       body: { expectedUpdatedAt: calculated.json.updatedAt },
     });
 
-    const marked = await apiFetch(`/api/costings/${costingId}/po`, { method: "POST", cookie, body: { isPo: true } });
+    // The customer's PO number is mandatory — it is the confirmation step that
+    // stops a stray click recording a win that never happened.
+    const noNumber = await apiFetch(`/api/costings/${costingId}/po`, { method: "POST", cookie, body: { isPo: true } });
+    expect(noNumber.status).toBe(400);
+    expect((noNumber.json.error as { code: string }).code).toBe("PO_NUMBER_REQUIRED");
+
+    const marked = await apiFetch(`/api/costings/${costingId}/po`, {
+      method: "POST",
+      cookie,
+      body: { isPo: true, poNumber: "PO/2026/00123" },
+    });
     expect(marked.status).toBe(200);
     expect(marked.json.isPo).toBe(true);
+    expect(marked.json.poNumber).toBe("PO/2026/00123");
 
     // Marking a PO must not disturb the costing's own state or recalculation
     // status — it is commercial tracking, not a calculation input.
     const after = await apiFetch(`/api/costings/${costingId}`, { cookie });
     expect(after.json.status).toBe("finalized");
 
+    // Clearing needs no number, and must also clear the stored one.
     const unmarked = await apiFetch(`/api/costings/${costingId}/po`, { method: "POST", cookie, body: { isPo: false } });
     expect(unmarked.json.isPo).toBe(false);
+    expect(unmarked.json.poNumber).toBeNull();
 
     const audit = await pool.query(
       `SELECT action FROM audit_events WHERE entity_id = $1 AND action IN ('COSTING_MARKED_PO', 'COSTING_UNMARKED_PO') ORDER BY occurred_at`,

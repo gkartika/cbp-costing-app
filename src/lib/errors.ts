@@ -77,6 +77,7 @@ export const Errors = {
   marginInvalid: () => new AppError("MARGIN_INVALID", 400, "Margin harus minimal 0% dan kurang dari 100%."),
   coatingGuideNotFound: () => new AppError("COATING_GUIDE_NOT_FOUND", 422, "Panduan coating tidak ditemukan."),
   diesCostRequired: () => new AppError("DIES_COST_REQUIRED", 400, "Masukkan biaya dies untuk order ini."),
+  poNumberRequired: () => new AppError("PO_NUMBER_REQUIRED", 400, "Masukkan nomor PO dari customer."),
   diesCostGuideNotFound: () =>
     new AppError("DIES_COST_GUIDE_NOT_FOUND", 422, "Tidak ada referensi biaya dies untuk kombinasi ini — gunakan opsi \"Lainnya\" dan masukkan biaya secara manual."),
   anchorDevelopedLengthRequired: () =>

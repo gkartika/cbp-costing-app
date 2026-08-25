@@ -289,7 +289,11 @@ export function Workspace(props: {
 
   useEffect(() => {
     apiGet<Lookups>("/api/guides/active/lookups")
-      .then(setLookups)
+      // Merged over the empty shape rather than replacing it: a response that
+      // is missing a key (an older server during a rolling deploy, a cached
+      // payload from a previous build) would otherwise leave that field
+      // undefined and crash the first render that indexes into it.
+      .then((data) => setLookups({ ...EMPTY_LOOKUPS, ...data }))
       .catch(() => {});
   }, []);
 
