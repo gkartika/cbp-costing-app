@@ -71,10 +71,11 @@ export function MasterDataAdmin() {
     });
   }, []);
 
+  // Deliberately does NOT clear error/report/importMsg: callers invoke this to
+  // refresh after their own mutation, and wiping the message they just set
+  // (e.g. bulk import's "Staged N rows") would hide the result from the user.
+  // Switching tables clears those separately, in the effect below.
   async function loadTableData(table: string) {
-    setError(null);
-    setReport(null);
-    setImportMsg(null);
     const [rowsRes, pendingRes] = await Promise.all([
       api<{ guideVersionId: string | null; rows: Record<string, unknown>[] }>(`/api/master-data/${table}`),
       api<{ changes: PendingChange[] }>(`/api/master-data/${table}/pending`),
@@ -84,8 +85,19 @@ export function MasterDataAdmin() {
   }
 
   useEffect(() => {
-    if (selectedTable) loadTableData(selectedTable);
-    setEditing(null);
+    if (!selectedTable) return;
+    let cancelled = false;
+    void (async () => {
+      await loadTableData(selectedTable);
+      if (cancelled) return;
+      setEditing(null);
+      setError(null);
+      setReport(null);
+      setImportMsg(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedTable]);
 
   function openAdd() {
@@ -245,7 +257,11 @@ export function MasterDataAdmin() {
         ))}
       </div>
 
-      {error && <p className="error-note">{error}</p>}
+      {error && (
+        <p className="error-note" role="alert">
+          {error}
+        </p>
+      )}
 
       {activeTableMeta && (
         <>
@@ -416,7 +432,11 @@ export function MasterDataAdmin() {
             <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. supplier price update Aug 2026" />
           </label>
 
-          {error && <p className="error-note">{error}</p>}
+          {error && (
+        <p className="error-note" role="alert">
+          {error}
+        </p>
+      )}
 
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button onClick={submitChange} disabled={busy} className="btn">

@@ -137,7 +137,11 @@ export function GuideAdmin({ initialGuides }: { initialGuides: Guide[] }) {
         </div>
       </header>
 
-      {error && <p className="error-note">{error}</p>}
+      {error && (
+        <p className="error-note" role="alert">
+          {error}
+        </p>
+      )}
 
       <div className="card">
         <h2>Import New Version</h2>

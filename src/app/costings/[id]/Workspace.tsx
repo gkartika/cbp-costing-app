@@ -732,7 +732,11 @@ export function Workspace(props: {
         </div>
       )}
 
-      {error && <p className="error-note">{error}</p>}
+      {error && (
+        <p className="error-note" role="alert">
+          {error}
+        </p>
+      )}
 
       <div className="card">
         <div className="section-actions">
@@ -747,13 +751,15 @@ export function Workspace(props: {
           <table>
             <thead>
               <tr>
-                <th>#</th>
-                <th>Route</th>
-                <th>Description</th>
-                <th>Qty</th>
-                <th>Unit Price</th>
-                <th>Order Total</th>
-                <th></th>
+                <th scope="col">#</th>
+                <th scope="col">Route</th>
+                <th scope="col">Description</th>
+                <th scope="col">Qty</th>
+                <th scope="col">Unit Price</th>
+                <th scope="col">Order Total</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -783,16 +789,28 @@ export function Workspace(props: {
                     <div style={{ display: "flex", gap: 6 }}>
                       {canEdit && editableStatus && (
                         <>
-                          <button onClick={() => openEditPanel(l)} className="btn secondary small">
+                          <button
+                            onClick={() => openEditPanel(l)}
+                            className="btn secondary small"
+                            aria-label={`Edit item ${l.lineNo}`}
+                          >
                             Edit
                           </button>
-                          <button onClick={() => deleteLine(l)} className="icon-btn">
-                            ✕
+                          <button
+                            onClick={() => deleteLine(l)}
+                            className="icon-btn"
+                            aria-label={`Delete item ${l.lineNo}`}
+                          >
+                            <span aria-hidden="true">✕</span>
                           </button>
                         </>
                       )}
                       {l.latestUnitSellingPrice !== null && (
-                        <button onClick={() => loadExplanation(l)} className="btn secondary small">
+                        <button
+                          onClick={() => loadExplanation(l)}
+                          className="btn secondary small"
+                          aria-label={`Explain calculation for item ${l.lineNo}`}
+                        >
                           Explain
                         </button>
                       )}
@@ -1057,7 +1075,11 @@ export function Workspace(props: {
             </label>
           )}
 
-          {error && <p className="error-note">{error}</p>}
+          {error && (
+        <p className="error-note" role="alert">
+          {error}
+        </p>
+      )}
 
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button onClick={saveLine} disabled={busy} className="btn">
@@ -1071,7 +1093,7 @@ export function Workspace(props: {
       )}
 
       {showPreview && preview && (
-        <Modal onClose={() => setShowPreview(false)} width={560}>
+        <Modal onClose={() => setShowPreview(false)} width={560} label="Quotation Preview">
           <Ticket title="Quotation Preview" tag={preview.quotationNo ?? "DRAFT"}>
             {preview.lines.map((l) => (
               <div key={l.lineNo}>
@@ -1090,7 +1112,7 @@ export function Workspace(props: {
       )}
 
       {showAudit && (
-        <Modal onClose={() => setShowAudit(false)} width={640}>
+        <Modal onClose={() => setShowAudit(false)} width={640} label="Audit Trail">
           <h2 style={{ marginBottom: 14 }}>Audit Trail</h2>
           {auditEvents.length === 0 && <p className="empty-state">No events yet.</p>}
           {auditEvents.map((ev) => (
@@ -1117,7 +1139,7 @@ export function Workspace(props: {
       )}
 
       {showExplanation && explanation && (
-        <Modal onClose={() => setShowExplanation(false)} width={620}>
+        <Modal onClose={() => setShowExplanation(false)} width={620} label="Calculation Explanation">
           <Ticket title="Calculation Explanation" tag={new Date(explanation.calculatedAt).toLocaleDateString()}>
             {explanation.rawWeightPerItemKg !== null && (
               <TicketLine label="Raw weight / item" value={`${explanation.rawWeightPerItemKg.toFixed(6)} kg`} sub />

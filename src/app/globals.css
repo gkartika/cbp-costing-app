@@ -686,3 +686,49 @@ tr:last-child td {
   max-width: 420px;
   width: 100%;
 }
+
+/* ---------------------------------------------------------------
+   Accessibility utilities (Phase 4)
+   --------------------------------------------------------------- */
+
+/*
+ * Visually hidden but still announced by screen readers — used for things
+ * that are obvious sighted-only (an actions column header, an icon button's
+ * purpose) but silent without it. Not `display:none`, which would remove it
+ * from the accessibility tree entirely.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * Inputs already had a focus ring; buttons and links did not, which left
+ * keyboard users unable to see where they were. :focus-visible keeps the
+ * ring off for mouse clicks.
+ */
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--steel-light);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

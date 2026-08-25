@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    # The suite talks to a real Postgres rather than mocks — a mocked DB would
+    # hide exactly the migration/constraint failures this pipeline exists to catch.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cbp_app
+          POSTGRES_PASSWORD: ci_only_not_a_real_secret
+          POSTGRES_DB: cbp_costing_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # .env.test is gitignored (it holds a local DB password), so CI writes
+      # its own pointing at the service container above.
+      - name: Write CI test env
+        run: |
+          echo "DATABASE_URL=postgresql://cbp_app:ci_only_not_a_real_secret@localhost:5432/cbp_costing_test" > .env.test
+          echo "NODE_ENV=test" >> .env.test
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint .
+
+      # `npm test` runs migrate:test:up first, so this also proves every
+      # migration applies cleanly from an empty database.
+      - name: Test
+        run: npm test

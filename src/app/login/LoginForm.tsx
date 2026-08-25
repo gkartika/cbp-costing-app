@@ -36,13 +36,31 @@ export function LoginForm() {
     <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <label className="field">
         <span className="field-label">Username</span>
-        <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoFocus
+          required
+          autoComplete="username"
+          aria-invalid={error !== null}
+        />
       </label>
       <label className="field">
         <span className="field-label">Password</span>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          autoComplete="current-password"
+          aria-invalid={error !== null}
+        />
       </label>
-      {error && <p className="error-note">{error}</p>}
+      {error && (
+        <p className="error-note" role="alert">
+          {error}
+        </p>
+      )}
       <button type="submit" className="btn" disabled={submitting} style={{ width: "100%" }}>
         {submitting ? "Masuk..." : "Masuk"}
       </button>
