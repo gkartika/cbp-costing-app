@@ -10,7 +10,9 @@ export default async function CostingWorkspacePage({ params }: { params: Promise
   if (!user) redirect("/login");
 
   const { id } = await params;
-  const { rows } = await pool.query<CostingHeaderRow>(`SELECT * FROM costing_headers WHERE costing_id = $1 AND deleted_at IS NULL`, [id]);
+  const { rows } = await pool.query<CostingHeaderRow & { account_payment_terms: string | null }>(`SELECT ch.*, c.payment_terms AS account_payment_terms
+     FROM costing_headers ch LEFT JOIN customers c ON c.customer_id = ch.customer_id
+     WHERE ch.costing_id = $1 AND ch.deleted_at IS NULL`, [id]);
   if (rows.length === 0) notFound();
   const costing = serializeCosting(rows[0], user.userId);
 

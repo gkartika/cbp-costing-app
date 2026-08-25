@@ -18,11 +18,20 @@ export type CostingHeaderRow = {
   finalized_at: Date | null;
   voided_at: Date | null;
   deleted_at: Date | null;
+  payment_terms_override: string | null;
   is_po: boolean;
   po_number: string | null;
 };
 
-export function serializeCosting(row: CostingHeaderRow, currentUserId: string) {
+/**
+ * `accountPaymentTerms` is the customer account default, resolved server-side
+ * because the client would otherwise have to name-match against a customer
+ * list it does not always have loaded.
+ */
+export function serializeCosting(
+  row: CostingHeaderRow & { account_payment_terms?: string | null },
+  currentUserId: string,
+) {
   const editableStatus = row.status === "draft" || row.status === "calculated";
   return {
     costingId: row.costing_id,
@@ -38,6 +47,8 @@ export function serializeCosting(row: CostingHeaderRow, currentUserId: string) {
     currency: row.currency,
     taxOutputMode: row.tax_output_mode,
     validityDays: row.validity_days,
+    paymentTermsOverride: row.payment_terms_override,
+    accountPaymentTerms: row.account_payment_terms ?? null,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

@@ -16,6 +16,8 @@ type Costing = {
   revisionNo: number;
   parentCostingId: string | null;
   validityDays: number;
+  paymentTermsOverride: string | null;
+  accountPaymentTerms: string | null;
   updatedAt: string;
   canEdit: boolean;
 };
@@ -277,7 +279,7 @@ export function Workspace(props: {
   const [adminUsers, setAdminUsers] = useState<{ userId: string; username: string; displayName: string }[]>([]);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [editingCustomer, setEditingCustomer] = useState(false);
-  const [customers, setCustomers] = useState<{ customerId: string; customerName: string; customerCode: string | null }[]>([]);
+  const [customers, setCustomers] = useState<{ customerId: string; customerName: string; customerCode: string | null; paymentTerms: string | null }[]>([]);
   const [customerSelected, setCustomerSelected] = useState("");
   const [customerNewName, setCustomerNewName] = useState("");
 
@@ -634,6 +636,7 @@ export function Workspace(props: {
             <p>
               {costing.quotationNo ?? "no quotation no."} {costing.revisionNo > 0 && `· revision #${costing.revisionNo}`}
             </p>
+            <PaymentTermsField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
           </div>
         </div>
         <div className="header-actions">
@@ -1213,5 +1216,85 @@ export function Workspace(props: {
         </Modal>
       )}
     </div>
+  );
+}
+
+/**
+ * Payment terms are negotiated per customer account, so the account value is
+ * the default and this field only records a deviation for one quotation.
+ * Showing the inherited value (rather than an empty box) makes clear that
+ * blank means "use the account terms", not "no terms".
+ */
+function PaymentTermsField({
+  costing,
+  canEdit,
+  onSaved,
+}: {
+  costing: Costing;
+  canEdit: boolean;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const accountTerms = costing.accountPaymentTerms;
+  const effective = costing.paymentTermsOverride ?? accountTerms;
+
+  async function save() {
+    setBusy(true);
+    try {
+      await apiPatch(`/api/costings/${costing.costingId}`, {
+        expectedUpdatedAt: costing.updatedAt,
+        paymentTermsOverride: value.trim() || null,
+      });
+      setEditing(false);
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <p style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={accountTerms ?? "mis. 30 hari setelah invoice"}
+          aria-label="Termin pembayaran khusus quotation ini"
+          style={{ minWidth: 240 }}
+        />
+        <button onClick={save} disabled={busy} className="btn small">
+          Simpan
+        </button>
+        <button onClick={() => setEditing(false)} disabled={busy} className="btn secondary small">
+          Batal
+        </button>
+      </p>
+    );
+  }
+
+  return (
+    <p style={{ fontSize: 12 }}>
+      Termin: {effective ?? <em style={{ color: "var(--ink-soft)" }}>belum diatur</em>}
+      {costing.paymentTermsOverride && (
+        <span className="pill neutral" style={{ marginLeft: 6, fontSize: 10 }}>
+          khusus quotation ini
+        </span>
+      )}
+      {canEdit && (
+        <button
+          onClick={() => {
+            setValue(costing.paymentTermsOverride ?? "");
+            setEditing(true);
+          }}
+          className="link-btn"
+          style={{ fontSize: 11, marginLeft: 6 }}
+        >
+          ubah
+        </button>
+      )}
+    </p>
   );
 }

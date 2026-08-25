@@ -45,6 +45,10 @@ export async function buildGuidePackageXlsx(opts: BuildOptions): Promise<Buffer>
       ["dies_cost_guide_id", "product_family", "product_profile", "size_label", "diameter_mm", "cost", "currency", "active"],
       ["DIES-BOLT-HEAVYHEX-1", "Bolt", "Heavy Hex", "1", 25.4, 5300000, "IDR", true],
     ],
+    Quotation_Terms: [
+      ["quotation_term_id", "sort_order", "term_text", "active"],
+      ["QT-01", 1, "Harga tidak termasuk (exclude) PPN", true],
+    ],
     Minimum_Prices: [
       ["minimum_price_id", "product_family", "material_class", "minimum_price", "currency", "active"],
       // Well below the fixture's computed Bolt price, so the floor never

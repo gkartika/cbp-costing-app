@@ -182,6 +182,19 @@ export const TAB_SPECS: TabSpec[] = [
     uniqueBusinessKey: ["product_family", "material_class"],
   },
   {
+    tabName: "Quotation_Terms",
+    table: "quotation_terms",
+    idColumn: "term_id",
+    idPrefix: "term",
+    keyHeader: "quotation_term_id",
+    columns: [
+      { header: "sort_order", dbColumn: "sort_order", type: "number", required: true },
+      { header: "term_text", dbColumn: "term_text", type: "string", required: true },
+      activeCol,
+    ],
+    uniqueBusinessKey: ["sort_order"],
+  },
+  {
     tabName: "Coating_Guides",
     table: "coating_price_guides",
     idColumn: "coating_rule_id",

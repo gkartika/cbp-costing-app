@@ -32,6 +32,7 @@ export async function seedGuideVersion(versionCode: string): Promise<string> {
   await insertRawBarStock(guideVersionId);
   await insertDiesCostGuides(guideVersionId);
   await insertMinimumPrices(guideVersionId);
+  await insertQuotationTerms(guideVersionId);
   await insertMaterialGradeMap(guideVersionId);
   await insertGradeProfileRules(guideVersionId);
   await insertGradePriceAliases(guideVersionId);
@@ -157,6 +158,23 @@ async function insertMinimumPrices(gv: string) {
         materialClass,
         minimumPrice,
       ],
+    );
+  }
+}
+
+/** CBP's standard quotation boilerplate (DEC-016). */
+async function insertQuotationTerms(gv: string) {
+  const terms = [
+    "Harga tidak termasuk (exclude) PPN",
+    "Termasuk franco / Pengiriman Jabodetabek",
+    "Harga valid hanya dengan quantity sesuai dengan penawaran",
+    "Validity harga 30 hari",
+  ];
+  for (const [i, text] of terms.entries()) {
+    await pool.query(
+      `INSERT INTO quotation_terms (term_id, guide_version_id, source_key, sort_order, term_text)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [generateId("term"), gv, `QT-0${i + 1}`, i + 1, text],
     );
   }
 }
