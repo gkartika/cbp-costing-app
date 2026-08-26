@@ -19,6 +19,8 @@ export type CostingHeaderRow = {
   voided_at: Date | null;
   deleted_at: Date | null;
   payment_terms_override: string | null;
+  signed_by_name: string | null;
+  signed_by_title: string | null;
   is_po: boolean;
   po_number: string | null;
 };
@@ -48,6 +50,8 @@ export function serializeCosting(
     taxOutputMode: row.tax_output_mode,
     validityDays: row.validity_days,
     paymentTermsOverride: row.payment_terms_override,
+    signedByName: row.signed_by_name,
+    signedByTitle: row.signed_by_title,
     accountPaymentTerms: row.account_payment_terms ?? null,
     createdBy: row.created_by,
     createdAt: row.created_at,

@@ -198,11 +198,21 @@ export async function generateQuotationXlsx(doc: QuotationDocument): Promise<Buf
   sheet.getCell(r, 4).font = { name: FONT, size: 9 };
   sheet.getCell(r + 4, 4).value = doc.preparedBy ?? "";
   sheet.getCell(r + 4, 4).font = { name: FONT, size: 10, bold: true };
-  sheet.getCell(r + 5, 4).value = COMPANY.name;
-  sheet.getCell(r + 5, 4).font = { name: FONT, size: 9, color: { argb: INK_SOFT } };
+
+  // Jabatan sits between the name and the company, as on the letterhead
+  // sample (Brand Guidelines p37). Omitted entirely when unset rather than
+  // printing an empty line that would read as a missing title.
+  let signRow = r + 5;
+  if (doc.preparedByTitle) {
+    sheet.getCell(signRow, 4).value = doc.preparedByTitle;
+    sheet.getCell(signRow, 4).font = { name: FONT, size: 9 };
+    signRow += 1;
+  }
+  sheet.getCell(signRow, 4).value = COMPANY.name;
+  sheet.getCell(signRow, 4).font = { name: FONT, size: 9, color: { argb: INK_SOFT } };
 
   // ---------------------------------------------------------------- footer
-  const footerRow = r + 7;
+  const footerRow = signRow + 2;
   for (let c = 1; c <= 5; c++) {
     sheet.getCell(footerRow, c).fill = {
       type: "pattern",

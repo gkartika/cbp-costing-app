@@ -18,6 +18,8 @@ type Costing = {
   validityDays: number;
   paymentTermsOverride: string | null;
   accountPaymentTerms: string | null;
+  signedByName: string | null;
+  signedByTitle: string | null;
   updatedAt: string;
   canEdit: boolean;
 };
@@ -637,6 +639,7 @@ export function Workspace(props: {
               {costing.quotationNo ?? "no quotation no."} {costing.revisionNo > 0 && `· revision #${costing.revisionNo}`}
             </p>
             <PaymentTermsField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
+            <SignatureField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
           </div>
         </div>
         <div className="header-actions">
@@ -1287,6 +1290,96 @@ function PaymentTermsField({
         <button
           onClick={() => {
             setValue(costing.paymentTermsOverride ?? "");
+            setEditing(true);
+          }}
+          className="link-btn"
+          style={{ fontSize: 11, marginLeft: 6 }}
+        >
+          ubah
+        </button>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Who signs the quotation letter. Defaults to the costing owner, because the
+ * person pricing it usually is the sender — but the letter often goes out
+ * over a manager's name, so both the name and the jabatan are overridable
+ * per quotation (Brand Guidelines p37 signs name + title).
+ */
+function SignatureField({
+  costing,
+  canEdit,
+  onSaved,
+}: {
+  costing: Costing;
+  canEdit: boolean;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await apiPatch(`/api/costings/${costing.costingId}`, {
+        expectedUpdatedAt: costing.updatedAt,
+        signedByName: name.trim() || null,
+        signedByTitle: title.trim() || null,
+      });
+      setEditing(false);
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <p style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Nama penanda tangan"
+          aria-label="Nama penanda tangan quotation"
+          style={{ minWidth: 170 }}
+        />
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Jabatan"
+          aria-label="Jabatan penanda tangan"
+          style={{ minWidth: 150 }}
+        />
+        <button onClick={save} disabled={busy} className="btn small">
+          Simpan
+        </button>
+        <button onClick={() => setEditing(false)} disabled={busy} className="btn secondary small">
+          Batal
+        </button>
+      </p>
+    );
+  }
+
+  return (
+    <p style={{ fontSize: 12 }}>
+      Ditandatangani:{" "}
+      {costing.signedByName ? (
+        <>
+          {costing.signedByName}
+          {costing.signedByTitle && <span style={{ color: "var(--ink-soft)" }}> · {costing.signedByTitle}</span>}
+        </>
+      ) : (
+        <em style={{ color: "var(--ink-soft)" }}>pemilik costing</em>
+      )}
+      {canEdit && (
+        <button
+          onClick={() => {
+            setName(costing.signedByName ?? "");
+            setTitle(costing.signedByTitle ?? "");
             setEditing(true);
           }}
           className="link-btn"

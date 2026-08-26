@@ -23,7 +23,9 @@ export type QuotationDocument = {
   terms: string[];
   /** Negotiated per account; the costing's own override wins when set. */
   paymentTerms: string | null;
+  /** Who signs the letter: the costing's own signatory when set, else the owner. */
   preparedBy: string | null;
+  preparedByTitle: string | null;
 };
 
 /**
@@ -108,6 +110,7 @@ export async function buildQuotationDocument(header: CostingHeaderRow): Promise<
     totalExPpn: lines.reduce((sum, l) => sum + l.orderTotal, 0),
     terms: termRows.map((t) => t.term_text),
     paymentTerms: header.payment_terms_override ?? paymentRows[0]?.payment_terms ?? null,
-    preparedBy: ownerRows[0]?.display_name ?? null,
+    preparedBy: header.signed_by_name ?? ownerRows[0]?.display_name ?? null,
+    preparedByTitle: header.signed_by_title ?? null,
   };
 }

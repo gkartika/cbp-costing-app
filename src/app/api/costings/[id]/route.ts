@@ -88,6 +88,9 @@ const PatchCostingSchema = z.object({
   validityDays: z.number().int().positive().optional(),
   /** Overrides the customer account default for this quotation only; null clears it. */
   paymentTermsOverride: z.string().max(300).nullable().optional(),
+  /** Who signs the quotation; null falls back to the owner's display name. */
+  signedByName: z.string().max(200).nullable().optional(),
+  signedByTitle: z.string().max(200).nullable().optional(),
 });
 
 export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
@@ -117,10 +120,16 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
   const nextValidityDays = body.data.validityDays ?? before.validity_days;
   const nextPaymentOverride =
     "paymentTermsOverride" in body.data ? (body.data.paymentTermsOverride?.trim() || null) : before.payment_terms_override;
+  const nextSignedName =
+    "signedByName" in body.data ? (body.data.signedByName?.trim() || null) : before.signed_by_name;
+  const nextSignedTitle =
+    "signedByTitle" in body.data ? (body.data.signedByTitle?.trim() || null) : before.signed_by_title;
   const changedFields: string[] = [];
   if (nextCustomerName !== before.customer_name_snapshot) changedFields.push("customerName");
   if (nextValidityDays !== before.validity_days) changedFields.push("validityDays");
   if (nextPaymentOverride !== before.payment_terms_override) changedFields.push("paymentTermsOverride");
+  if (nextSignedName !== before.signed_by_name) changedFields.push("signedByName");
+  if (nextSignedTitle !== before.signed_by_title) changedFields.push("signedByTitle");
 
   const after = await withTransaction(async (client) => {
     const { rows, rowCount } = await client.query<CostingHeaderRow>(
@@ -128,10 +137,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
          SET customer_name_snapshot = $1,
              validity_days = $2,
              payment_terms_override = $3,
+             signed_by_name = $4,
+             signed_by_title = $5,
              updated_at = now()
-       WHERE costing_id = $4 AND updated_at = $5
+       WHERE costing_id = $6 AND updated_at = $7
        RETURNING *`,
-      [nextCustomerName, nextValidityDays, nextPaymentOverride, id, before.updated_at],
+      [nextCustomerName, nextValidityDays, nextPaymentOverride, nextSignedName, nextSignedTitle, id, before.updated_at],
     );
     if (rowCount === 0) {
       // Lost the race between our read and this write — another update committed first.
