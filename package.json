@@ -17,7 +17,9 @@
     "seed:user": "dotenv -e .env.local -- tsx scripts/seed-user.ts",
     "seed:guide": "dotenv -e .env.local -- tsx scripts/seed-dev-guide.ts",
     "backup": "dotenv -e .env.local -- tsx scripts/backup-db.ts",
-    "restore": "tsx scripts/restore-db.ts"
+    "restore": "tsx scripts/restore-db.ts",
+    "export:guide": "dotenv -e .env.local -- tsx scripts/export-guide.ts",
+    "provision": "tsx scripts/provision.ts"
   },
   "dependencies": {
     "argon2": "^0.45.1",

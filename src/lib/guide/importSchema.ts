@@ -164,7 +164,14 @@ export const TAB_SPECS: TabSpec[] = [
       { header: "currency", dbColumn: "currency", type: "string", required: false },
       activeCol,
     ],
-    uniqueBusinessKey: ["product_family", "grade_or_spec", "size_label"],
+    // Includes thread_condition and product_type because the same
+    // (family, grade, size) legitimately carries more than one priced row —
+    // Bolt HT vs FT, and Stud vs Anchor within "Stud / Anchor". The narrow
+    // (family, grade, size) key predates both columns and made the import
+    // stricter than the data model: a package containing CBP's real Bolt
+    // price book was rejected as duplicate, so the app could not re-import
+    // its own exported guide. validateGuide.ts already used this wider key.
+    uniqueBusinessKey: ["product_family", "grade_or_spec", "size_label", "thread_condition", "product_type"],
   },
   {
     tabName: "Minimum_Prices",
