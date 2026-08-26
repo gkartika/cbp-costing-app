@@ -11,6 +11,7 @@ export function parseFilters(req: NextRequest): ReportFilters {
   const poFilter = p.get("po");
   return {
     customer: p.get("customer") ?? undefined,
+    salesperson: p.get("salesperson") ?? undefined,
     dateFrom: p.get("from") ?? undefined,
     dateTo: p.get("to") ?? undefined,
     statuses,

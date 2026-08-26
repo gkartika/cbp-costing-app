@@ -35,6 +35,7 @@ export async function generateReportXlsx(result: ReportResult, filters: ReportFi
 
   const filterBits = [
     filters.customer?.trim() ? `Customer: ${filters.customer.trim()}` : "Customer: semua",
+    filters.salesperson?.trim() ? `Salesperson: ${filters.salesperson.trim()}` : "Salesperson: semua",
     filters.dateFrom || filters.dateTo
       ? `Periode: ${filters.dateFrom || "awal"} s/d ${filters.dateTo || "sekarang"}`
       : "Periode: semua",
@@ -50,7 +51,7 @@ export async function generateReportXlsx(result: ReportResult, filters: ReportFi
     "Customer",
     "Quotation No",
     "Status",
-    "User",
+    "Salesperson",
     "Total Quotation",
     "PO",
     "No. PO",
@@ -63,7 +64,7 @@ export async function generateReportXlsx(result: ReportResult, filters: ReportFi
       s.customerName,
       s.quotationNo ?? "—",
       s.status,
-      s.ownerName,
+      s.salesperson,
       s.totalNominal ?? 0,
       s.isPo ? "Ya" : "Tidak",
       s.poNumber ?? "",

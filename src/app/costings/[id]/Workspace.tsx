@@ -131,6 +131,9 @@ const EMPTY_LOOKUPS: Lookups = {
   defaultWeightTolerancePercent: 0,
 };
 
+/** Sentinel for "not in the user directory" in the Salesperson picker. */
+const SALESPERSON_OTHER = "__other__";
+
 const EMPTY_FORM: LineForm = {
   route: "",
   productFamily: "",
@@ -309,7 +312,7 @@ export function Workspace(props: {
       .catch(() => {});
   }, [canEdit]);
 
-  const CUSTOMER_ADD_NEW = "__add_new__";
+const CUSTOMER_ADD_NEW = "__add_new__";
 
   function openCustomerEditor() {
     const existing = customers.find((c) => c.customerName === costing.customerName);
@@ -1303,10 +1306,10 @@ function PaymentTermsField({
 }
 
 /**
- * Who signs the quotation letter. Defaults to the costing owner, because the
- * person pricing it usually is the sender — but the letter often goes out
- * over a manager's name, so both the name and the jabatan are overridable
- * per quotation (Brand Guidelines p37 signs name + title).
+ * The salesperson whose name appears under "Melayani Sepenuh Hati" on the
+ * quotation. Defaults to the costing owner, since the person pricing it
+ * usually is the sender — but a quotation often goes out over a colleague's
+ * name, so name and jabatan are both set per quotation.
  */
 function SignatureField({
   costing,
@@ -1320,7 +1323,25 @@ function SignatureField({
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
+  const [freeText, setFreeText] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [users, setUsers] = useState<{ userId: string; displayName: string }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await apiGet<{ users: { userId: string; displayName: string }[] }>("/api/users");
+        if (!cancelled) setUsers(data.users);
+      } catch {
+        // The picker degrades to the free-text box; tagging must not be blocked
+        // by a directory that failed to load.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function save() {
     setBusy(true);
@@ -1338,20 +1359,48 @@ function SignatureField({
   }
 
   if (editing) {
+    // A registered colleague is picked from the list so the name is spelled
+    // identically every time and the Salesperson report groups cleanly;
+    // "Lainnya…" still allows someone without an app account.
+    const known = users.some((u) => u.displayName === name);
     return (
       <p style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Nama penanda tangan"
-          aria-label="Nama penanda tangan quotation"
-          style={{ minWidth: 170 }}
-        />
+        <select
+          value={freeText || (name && !known) ? SALESPERSON_OTHER : name}
+          onChange={(e) => {
+            if (e.target.value === SALESPERSON_OTHER) {
+              setFreeText(true);
+              setName("");
+            } else {
+              setFreeText(false);
+              setName(e.target.value);
+            }
+          }}
+          aria-label="Salesperson yang menangani quotation ini"
+          style={{ minWidth: 180 }}
+        >
+          <option value="">— pemilik costing —</option>
+          {users.map((u) => (
+            <option key={u.userId} value={u.displayName}>
+              {u.displayName}
+            </option>
+          ))}
+          <option value={SALESPERSON_OTHER}>Lainnya…</option>
+        </select>
+        {(freeText || (name && !known)) && (
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nama salesperson"
+            aria-label="Nama salesperson lainnya"
+            style={{ minWidth: 160 }}
+          />
+        )}
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Jabatan"
-          aria-label="Jabatan penanda tangan"
+          placeholder="Jabatan (opsional)"
+          aria-label="Jabatan salesperson"
           style={{ minWidth: 150 }}
         />
         <button onClick={save} disabled={busy} className="btn small">
@@ -1366,7 +1415,7 @@ function SignatureField({
 
   return (
     <p style={{ fontSize: 12 }}>
-      Ditandatangani:{" "}
+      Salesperson:{" "}
       {costing.signedByName ? (
         <>
           {costing.signedByName}
@@ -1380,6 +1429,7 @@ function SignatureField({
           onClick={() => {
             setName(costing.signedByName ?? "");
             setTitle(costing.signedByTitle ?? "");
+            setFreeText(false);
             setEditing(true);
           }}
           className="link-btn"

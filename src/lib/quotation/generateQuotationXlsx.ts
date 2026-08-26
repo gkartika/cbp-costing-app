@@ -29,6 +29,9 @@ const COMPANY = {
   web: "www.ptcbp.com",
 };
 
+/** CBP's sign-off above the salesperson's name, in place of a generic closing. */
+const SIGN_OFF = "Melayani Sepenuh Hati";
+
 const MONEY = '#,##0';
 
 const JAKARTA_DATE = new Intl.DateTimeFormat("id-ID", {
@@ -194,22 +197,22 @@ export async function generateQuotationXlsx(doc: QuotationDocument): Promise<Buf
   r += allTerms.length + 2;
 
   // ---------------------------------------------------------------- signature
-  sheet.getCell(r, 4).value = "Hormat kami,";
-  sheet.getCell(r, 4).font = { name: FONT, size: 9 };
+  // CBP's own sign-off, not a generic "Hormat kami". The company name is not
+  // repeated here — the letterhead above already carries it, and repeating it
+  // under the signature crowds the block CBP asked for.
+  sheet.getCell(r, 4).value = SIGN_OFF;
+  sheet.getCell(r, 4).font = { name: FONT, size: 9.5, color: { argb: PURPLE } };
   sheet.getCell(r + 4, 4).value = doc.preparedBy ?? "";
   sheet.getCell(r + 4, 4).font = { name: FONT, size: 10, bold: true };
 
-  // Jabatan sits between the name and the company, as on the letterhead
-  // sample (Brand Guidelines p37). Omitted entirely when unset rather than
-  // printing an empty line that would read as a missing title.
+  // Jabatan is optional: printed under the name when set, omitted entirely
+  // otherwise rather than leaving a blank line that reads as a missing title.
   let signRow = r + 5;
   if (doc.preparedByTitle) {
     sheet.getCell(signRow, 4).value = doc.preparedByTitle;
-    sheet.getCell(signRow, 4).font = { name: FONT, size: 9 };
+    sheet.getCell(signRow, 4).font = { name: FONT, size: 9, color: { argb: INK_SOFT } };
     signRow += 1;
   }
-  sheet.getCell(signRow, 4).value = COMPANY.name;
-  sheet.getCell(signRow, 4).font = { name: FONT, size: 9, color: { argb: INK_SOFT } };
 
   // ---------------------------------------------------------------- footer
   const footerRow = signRow + 2;

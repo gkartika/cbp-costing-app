@@ -24,6 +24,7 @@ function fmtDate(iso: string): string {
 
 export function ReportsClient() {
   const [customer, setCustomer] = useState("");
+  const [salesperson, setSalesperson] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [statuses, setStatuses] = useState<string[]>(DEFAULT_STATUSES);
@@ -37,6 +38,7 @@ export function ReportsClient() {
   function queryString(): string {
     const p = new URLSearchParams();
     if (customer.trim()) p.set("customer", customer.trim());
+    if (salesperson.trim()) p.set("salesperson", salesperson.trim());
     if (from) p.set("from", from);
     if (to) p.set("to", to);
     statuses.forEach((s) => p.append("status", s));
@@ -95,6 +97,14 @@ export function ReportsClient() {
               value={customer}
               onChange={(e) => setCustomer(e.target.value)}
               placeholder="Semua customer"
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">Salesperson</span>
+            <input
+              value={salesperson}
+              onChange={(e) => setSalesperson(e.target.value)}
+              placeholder="Semua salesperson"
             />
           </label>
           <label className="field">
@@ -185,7 +195,7 @@ export function ReportsClient() {
                     <th scope="col">Customer</th>
                     <th scope="col">Quotation No</th>
                     <th scope="col">Status</th>
-                    <th scope="col">User</th>
+                    <th scope="col">Salesperson</th>
                     <th scope="col">Total Quotation</th>
                     <th scope="col">PO</th>
                   </tr>
@@ -205,7 +215,7 @@ export function ReportsClient() {
                       <td>
                         <StatusPill status={s.status} />
                       </td>
-                      <td>{s.ownerName}</td>
+                      <td>{s.salesperson}</td>
                       <td className="mono" style={{ textAlign: "right" }}>
                         {money(s.totalNominal)}
                       </td>

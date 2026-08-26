@@ -8,6 +8,8 @@ export type ReportFilters = {
   dateTo?: string;
   /** Empty means every status except deleted. */
   statuses?: string[];
+  /** Matches the effective salesperson — the tagged name, else the owner. */
+  salesperson?: string;
   poFilter?: "all" | "po" | "no_po";
 };
 
@@ -18,6 +20,8 @@ export type ReportSummaryRow = {
   quotationNo: string | null;
   status: string;
   ownerName: string;
+  /** Who the quotation is credited to, resolved the same way the document prints it. */
+  salesperson: string;
   totalNominal: number | null;
   isPo: boolean;
   poNumber: string | null;
@@ -73,6 +77,12 @@ function buildWhere(filters: ReportFilters): { clause: string; params: unknown[]
     params.push(filters.statuses);
     conditions.push(`ch.status = ANY($${params.length}::text[])`);
   }
+  if (filters.salesperson?.trim()) {
+    params.push(`%${filters.salesperson.trim()}%`);
+    // Matches whatever the quotation actually prints: the tagged salesperson
+    // when set, otherwise the owner the document falls back to.
+    conditions.push(`COALESCE(ch.signed_by_name, u.display_name) ILIKE $${params.length}`);
+  }
   if (filters.poFilter === "po") conditions.push("ch.is_po = TRUE");
   else if (filters.poFilter === "no_po") conditions.push("ch.is_po = FALSE");
 
@@ -92,12 +102,14 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
     status: string;
     owner_name: string | null;
     owner_user_id: string;
+    salesperson: string;
     total_nominal: string | null;
     is_po: boolean;
     po_number: string | null;
   }>(
     `SELECT ch.costing_id, ch.created_at, ch.customer_name_snapshot, ch.quotation_no, ch.status,
             u.display_name AS owner_name, ch.owner_user_id, ch.is_po, ch.po_number,
+            COALESCE(ch.signed_by_name, u.display_name, ch.owner_user_id) AS salesperson,
             totals.total_nominal
      FROM costing_headers ch
      LEFT JOIN users u ON u.user_id = ch.owner_user_id
@@ -133,6 +145,7 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
             cl.line_no, cl.description, cl.product_family, cl.grade_input, cl.size_label, cl.qty,
             latest.unit_selling_price, latest.order_total
      FROM costing_headers ch
+     LEFT JOIN users u ON u.user_id = ch.owner_user_id
      JOIN costing_lines cl ON cl.costing_id = ch.costing_id AND cl.deleted_at IS NULL
      LEFT JOIN LATERAL (
        SELECT s.unit_selling_price, s.order_total FROM line_calculation_snapshots s
@@ -151,6 +164,7 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
     quotationNo: r.quotation_no,
     status: r.status,
     ownerName: r.owner_name ?? r.owner_user_id,
+    salesperson: r.salesperson,
     totalNominal: r.total_nominal !== null ? Number(r.total_nominal) : null,
     isPo: r.is_po,
     poNumber: r.po_number,
