@@ -1,0 +1,213 @@
+"use client";
+
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
+
+type User = {
+  userId: string;
+  username: string;
+  displayName: string;
+  active: boolean;
+  mustResetPassword: boolean;
+  roles: string[];
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  costing_user: "Costing User",
+  super_admin: "Super Admin",
+  auditor: "Auditor",
+};
+
+export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[]; currentUserId: string }) {
+  const router = useRouter();
+  const [users, setUsers] = useState(initialUsers);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("costing_user");
+  const [displayName, setDisplayName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ username: string; password: string } | null>(null);
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setCreated(null);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+          roles: [role],
+          // Blank means "call them by their username" — the server applies the
+          // same default, this just avoids sending an empty string.
+          ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error?.message ?? "Gagal membuat user.");
+
+      setCreated({ username: username.trim(), password });
+      setUsername("");
+      setPassword("");
+      setDisplayName("");
+      setRole("costing_user");
+
+      const listed = await fetch("/api/admin/users");
+      if (listed.ok) setUsers((await listed.json()).users);
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal membuat user.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="app-shell">
+      <div style={{ marginBottom: 16, display: "flex", gap: 16 }}>
+        <a href="/dashboard" className="link-btn">
+          &larr; Dashboard
+        </a>
+        <a href="/admin/master-data" className="link-btn">
+          Master Data
+        </a>
+        <a href="/admin/guides" className="link-btn">
+          Guide Admin
+        </a>
+      </div>
+
+      <header className="app-header">
+        <div className="brand">
+          <div className="brand-mark">CBP</div>
+          <div className="brand-text">
+            <h1>Users</h1>
+            <p>Kelola akun pengguna</p>
+          </div>
+        </div>
+      </header>
+
+      <div className="card">
+        <h2>Tambah User</h2>
+        <form onSubmit={handleCreate}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label className="field" style={{ minWidth: 180 }}>
+              <span className="field-label">Username</span>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                minLength={3}
+                autoComplete="off"
+                placeholder="mis. andi"
+              />
+            </label>
+
+            <label className="field" style={{ minWidth: 180 }}>
+              <span className="field-label">Password</span>
+              <input
+                type="text"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={4}
+                autoComplete="new-password"
+                placeholder="minimal 4 karakter"
+              />
+            </label>
+
+            <label className="field" style={{ minWidth: 160 }}>
+              <span className="field-label">Role</span>
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="costing_user">Costing User</option>
+                <option value="super_admin">Super Admin</option>
+                <option value="auditor">Auditor</option>
+              </select>
+            </label>
+
+            <label className="field" style={{ minWidth: 200 }}>
+              <span className="field-label">Nama tampilan (opsional)</span>
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                autoComplete="off"
+                placeholder="ikut username"
+              />
+            </label>
+
+            <button type="submit" disabled={busy} className="btn" style={{ marginBottom: 12 }}>
+              {busy ? "Menyimpan…" : "Buat User"}
+            </button>
+          </div>
+        </form>
+
+        <p className="hint" style={{ marginTop: 0 }}>
+          Password yang diisi di sini langsung berlaku — user bisa login dengan itu tanpa diminta ganti password.
+        </p>
+
+        {created && (
+          <p className="pill success" role="status" style={{ display: "inline-block" }}>
+            User <strong>{created.username}</strong> dibuat. Password: <strong>{created.password}</strong>
+          </p>
+        )}
+
+        {error && (
+          <p className="error-note" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Semua User</h2>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Username</th>
+                <th scope="col">Nama</th>
+                <th scope="col">Role</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.userId}>
+                  <td className="mono">
+                    {u.username}
+                    {u.userId === currentUserId && (
+                      <span className="pill neutral" style={{ marginLeft: 6 }}>
+                        anda
+                      </span>
+                    )}
+                  </td>
+                  <td>{u.displayName}</td>
+                  <td>{u.roles.map((r) => ROLE_LABELS[r] ?? r).join(", ") || "—"}</td>
+                  <td>
+                    {!u.active ? (
+                      <span className="pill danger">nonaktif</span>
+                    ) : u.mustResetPassword ? (
+                      <span className="pill amber">harus ganti password</span>
+                    ) : (
+                      <span className="pill success">aktif</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty-state">
+                    Belum ada user.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}

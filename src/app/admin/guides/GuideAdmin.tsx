@@ -125,6 +125,9 @@ export function GuideAdmin({ initialGuides }: { initialGuides: Guide[] }) {
         <a href="/admin/master-data" className="link-btn">
           Master Data
         </a>
+        <a href="/admin/users" className="link-btn">
+          Users
+        </a>
       </div>
 
       <header className="app-header">

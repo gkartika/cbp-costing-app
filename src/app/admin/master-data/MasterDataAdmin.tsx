@@ -237,6 +237,9 @@ export function MasterDataAdmin() {
         <a href="/admin/guides" className="link-btn">
           Guide Versions
         </a>
+        <a href="/admin/users" className="link-btn">
+          Users
+        </a>
       </div>
 
       <header className="app-header">

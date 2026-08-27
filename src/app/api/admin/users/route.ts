@@ -10,10 +10,23 @@ import { hashPassword } from "@/lib/auth/password";
 import { writeAuditEvent } from "@/lib/audit/writeAuditEvent";
 import { Errors } from "@/lib/errors";
 
+/**
+ * Creating a user needs a username and a password and nothing else.
+ *
+ * `password` is optional: given one, the account is usable immediately with
+ * exactly that password, which is how CBP actually onboards people — a Super
+ * Admin sets it and tells them. Omit it and the old behaviour stands, a random
+ * temporary password returned once and a forced reset on first login.
+ *
+ * The 4-character floor is deliberately low because the accounts in use are
+ * short by choice (business decision 2026-08-27). It is a floor against
+ * empty/1-character passwords, not a strength policy.
+ */
 const CreateUserSchema = z.object({
   username: z.string().min(3).max(64),
-  displayName: z.string().min(1).max(200),
-  roles: z.array(z.enum([ROLES.COSTING_USER, ROLES.SUPER_ADMIN, ROLES.AUDITOR])).min(1),
+  password: z.string().min(4).max(200).optional(),
+  displayName: z.string().min(1).max(200).optional(),
+  roles: z.array(z.enum([ROLES.COSTING_USER, ROLES.SUPER_ADMIN, ROLES.AUDITOR])).min(1).optional(),
 });
 
 export const GET = apiHandler(async () => {
@@ -55,9 +68,18 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (!body.success) {
     throw Errors.validation("Data user tidak valid.");
   }
-  const { username, displayName, roles } = body.data;
+  const { username, password } = body.data;
+  // Defaults that make username+password enough: the person is named by their
+  // username until someone edits it, and a new account is an ordinary costing
+  // user unless a Super Admin says otherwise.
+  const displayName = body.data.displayName?.trim() || username;
+  const roles = body.data.roles ?? [ROLES.COSTING_USER];
 
-  const tempPassword = randomBytes(9).toString("base64url");
+  // A password the admin chose is the real one — forcing a reset on top of it
+  // would mean the password they just handed the user stops working at first
+  // login, which is not what "set their password" means to anyone.
+  const chosePassword = password !== undefined;
+  const tempPassword = chosePassword ? password : randomBytes(9).toString("base64url");
   const passwordHash = await hashPassword(tempPassword);
   const userId = generateId("usr");
 
@@ -69,8 +91,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
 
     await client.query(
       `INSERT INTO users (user_id, username, password_hash, display_name, must_reset_password, created_by)
-       VALUES ($1, $2, $3, $4, TRUE, $5)`,
-      [userId, username, passwordHash, displayName, actor.userId],
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, username, passwordHash, displayName, !chosePassword, actor.userId],
     );
 
     const roleRows = await client.query<{ role_id: string; role_name: string }>(
@@ -92,15 +114,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
         actorUserId: actor.userId,
         actorRole: primaryAuditRole(actor),
         requestId,
-        afterJson: { username, displayName, roles },
+        // Never the password itself — only whether a human chose it, which is
+        // what an auditor needs to know about how the account was set up.
+        afterJson: { username, displayName, roles, passwordSetBy: chosePassword ? "super_admin" : "generated" },
         reason: "User created by Super Admin",
       },
       client,
     );
   });
 
+  // The temporary password is echoed back only when the server invented it —
+  // there is no other chance to see it. A password the admin chose is one they
+  // already have, so it is not repeated in the response.
   return NextResponse.json(
-    { userId, username, displayName, roles, temporaryPassword: tempPassword },
+    { userId, username, displayName, roles, temporaryPassword: chosePassword ? null : tempPassword },
     { status: 201 },
   );
 });

@@ -98,6 +98,9 @@ export default async function DashboardPage() {
               <a href="/admin/guides" className="link-btn">
                 Guide Admin
               </a>
+              <a href="/admin/users" className="link-btn">
+                Users
+              </a>
             </>
           )}
           <span style={{ fontSize: 13 }}>{user.displayName}</span>

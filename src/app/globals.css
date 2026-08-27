@@ -243,6 +243,13 @@ label.field-label {
   font-weight: 500;
 }
 
+/* Explanatory note under a control or form — secondary to the label above it. */
+.hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
 input,
 select,
 textarea {

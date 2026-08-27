@@ -74,4 +74,54 @@ describe("Super Admin restrictions", () => {
     expect(newLogin.status).toBe(200);
     expect(newLogin.body.mustResetPassword).toBe(true);
   });
+
+  it("a Super Admin can set the password directly, and it works immediately", async () => {
+    await createUser({ username: "admin_002", password: PASSWORD, roles: ["super_admin"] });
+    const { cookie } = await login("admin_002", PASSWORD);
+
+    // Username and password is the whole form: display name defaults to the
+    // username and the role to costing_user.
+    const create = await apiFetch("/api/admin/users", {
+      method: "POST",
+      cookie,
+      body: { username: "sari_001", password: "sari" },
+    });
+    expect(create.status).toBe(201);
+    expect(create.json.displayName).toBe("sari_001");
+    expect(create.json.roles).toEqual(["costing_user"]);
+    // Nothing to echo back — the admin already has the password they chose.
+    expect(create.json.temporaryPassword).toBeNull();
+
+    const newLogin = await login("sari_001", "sari");
+    expect(newLogin.status).toBe(200);
+    // The point of setting a password is that it keeps working; a forced reset
+    // would break it at first login.
+    expect(newLogin.body.mustResetPassword).toBe(false);
+  });
+
+  it("rejects a duplicate username and a password under 4 characters", async () => {
+    await createUser({ username: "admin_003", password: PASSWORD, roles: ["super_admin"] });
+    const { cookie } = await login("admin_003", PASSWORD);
+
+    const first = await apiFetch("/api/admin/users", {
+      method: "POST",
+      cookie,
+      body: { username: "taken_001", password: "budi" },
+    });
+    expect(first.status).toBe(201);
+
+    const dup = await apiFetch("/api/admin/users", {
+      method: "POST",
+      cookie,
+      body: { username: "taken_001", password: "lain" },
+    });
+    expect(dup.status).toBe(400);
+
+    const short = await apiFetch("/api/admin/users", {
+      method: "POST",
+      cookie,
+      body: { username: "shorty_001", password: "ab" },
+    });
+    expect(short.status).toBe(400);
+  });
 });
