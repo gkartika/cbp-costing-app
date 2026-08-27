@@ -25,6 +25,8 @@ async function loadLine(costingId: string, lineId: string): Promise<CostingLineR
 // must be able to actually clear a field, not just overwrite it.
 const PatchLineSchema = z.object({
   expectedUpdatedAt: z.string(),
+  /** Components only — how many of this part go into one set (DEC-017). */
+  qtyPerSet: z.number().int().min(1).optional(),
   route: z.enum(["TRADING", "CUSTOM"]).nullable().optional(),
   productFamily: z.string().min(1).max(100).nullable().optional(),
   description: z.string().max(500).nullable().optional(),
@@ -45,6 +47,7 @@ const PatchLineSchema = z.object({
 });
 
 const EDITABLE_COLUMNS: Record<string, string> = {
+  qtyPerSet: "qty_per_set",
   route: "route",
   productFamily: "product_family",
   description: "description",
@@ -79,6 +82,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
   if (new Date(body.data.expectedUpdatedAt).getTime() !== before.updated_at.getTime()) {
     throw Errors.staleUpdate();
   }
+  if ("qtyPerSet" in body.data && before.line_kind !== "component") {
+    throw Errors.validation("Jumlah per set hanya berlaku untuk komponen.");
+  }
 
   const changedFields: string[] = [];
   const setClauses: string[] = [];
@@ -104,6 +110,17 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
       values,
     );
     if (rowCount === 0) throw Errors.staleUpdate();
+
+    // A set's price is derived from its components, so changing one makes the
+    // set's own snapshot stale. Staleness is judged by `snapshot.created_at >=
+    // line.updated_at`, which only looks at the line itself — without touching
+    // the parent here, an edited component would leave the set line looking
+    // current and finalize would issue a quotation at the old set price.
+    if (before.parent_line_id) {
+      await client.query(`UPDATE costing_lines SET updated_at = now() WHERE costing_line_id = $1`, [
+        before.parent_line_id,
+      ]);
+    }
 
     // Any calculation-input change invalidates a prior Calculated status (AT-STATE-001).
     if (header.status === "calculated") {
@@ -150,6 +167,25 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx) => {
     await client.query(`UPDATE costing_lines SET deleted_at = now(), updated_at = now() WHERE costing_line_id = $1`, [
       lineId,
     ]);
+
+    // Deleting a set takes its components with it. They are only reachable
+    // through their parent, so leaving them behind would strand rows that no
+    // screen shows but every "does this costing have unpriced lines" check
+    // still counts.
+    if (before.line_kind === "set") {
+      await client.query(
+        `UPDATE costing_lines SET deleted_at = now(), updated_at = now()
+         WHERE parent_line_id = $1 AND deleted_at IS NULL`,
+        [lineId],
+      );
+    }
+    // Removing a component changes the set price above it (see PATCH).
+    if (before.parent_line_id) {
+      await client.query(`UPDATE costing_lines SET updated_at = now() WHERE costing_line_id = $1`, [
+        before.parent_line_id,
+      ]);
+    }
+
     if (header.status === "calculated") {
       await client.query(`UPDATE costing_headers SET status = 'draft', updated_at = now() WHERE costing_id = $1`, [id]);
     }

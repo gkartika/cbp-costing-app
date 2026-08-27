@@ -214,10 +214,10 @@ condition with a thread length, not be discarded.
 
 ## What this changes
 
-1. **Set pricing is the gap that matters.** 54% of lines are assemblies and the
-   app cannot represent one. Everything else here is import plumbing; this is a
-   product decision. Recommend specifying it before importing anything, because
-   the import schema depends on how sets are modelled.
+1. ~~**Set pricing is the gap that matters.**~~ **Done** — see
+   [DEC-017](DEC-017-set-pricing.md). A quotation line can now be a set whose
+   price comes from its components, each priced and explained on its own.
+   54% of lines were assemblies the app could not represent.
 2. **Heavy Hex is 36% of volume** and, like Hex, is a distinct product family in
    the guide. Confirm the rate cards cover it as thoroughly as Hex.
 3. **Washers are unpriced** — 30 rate rows and no `F436`. They appear in

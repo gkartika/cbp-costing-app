@@ -143,11 +143,24 @@ export async function generateQuotationXlsx(doc: QuotationDocument): Promise<Buf
   doc.lines.forEach((line, i) => {
     const r = headerRowNo + 1 + i;
     const row = sheet.getRow(r);
-    row.values = [line.lineNo, line.description ?? "—", line.qty, line.unitSellingPrice, line.orderTotal];
-    row.height = 18;
+    // A set is one quoted line at one price; its components are listed inside
+    // the same description cell so the customer can see what the assembly
+    // contains without the document implying they are separately priced
+    // (DEC-017).
+    const breakdown = line.components
+      .map((c) => `    • ${c.qtyPerSet > 1 ? `${c.qtyPerSet}x ` : ""}${c.description ?? "—"}`)
+      .join("\n");
+    const description = [line.description ?? "—", breakdown].filter(Boolean).join("\n");
+
+    row.values = [line.lineNo, description, line.qty, line.unitSellingPrice, line.orderTotal];
+    row.height = 18 + line.components.length * 12;
     row.eachCell((cell, col) => {
       cell.font = { name: FONT, size: 9.5 };
-      cell.alignment = { vertical: "middle", horizontal: col === 2 ? "left" : col === 1 ? "center" : "right" };
+      cell.alignment = {
+        vertical: line.components.length > 0 ? "top" : "middle",
+        horizontal: col === 2 ? "left" : col === 1 ? "center" : "right",
+        wrapText: col === 2 && line.components.length > 0,
+      };
       if (col >= 3) cell.numFmt = MONEY;
       cell.border = { bottom: { style: "hair", color: { argb: RULE } } };
       // Zebra banding keeps long item lists readable in print.

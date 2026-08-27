@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPost, apiPatch, apiDelete, type ApiError } from "./clientApi";
+import { buildLineTree, defaultSetDescription } from "@/lib/costings/sets";
 import { StatusPill } from "@/components/Pills";
 import { Modal } from "@/components/Modal";
 import { Ticket, TicketLine, TicketDivider, TicketTotal } from "@/components/Ticket";
@@ -58,6 +59,9 @@ type Explanation = {
 type Line = {
   costingLineId: string;
   lineNo: number;
+  lineKind: "item" | "set" | "component";
+  parentLineId: string | null;
+  qtyPerSet: number | null;
   route: string | null;
   productFamily: string | null;
   description: string | null;
@@ -99,6 +103,8 @@ type LineForm = {
   weightTolerancePercent: string;
   marginPercent: string;
   tradingItemId: string;
+  /** Components only: how many of this part go into one set. */
+  qtyPerSet: string;
 };
 
 type Lookups = {
@@ -152,6 +158,7 @@ const EMPTY_FORM: LineForm = {
   weightTolerancePercent: "",
   marginPercent: "",
   tradingItemId: "",
+  qtyPerSet: "1",
 };
 
 function lineToForm(l: Line): LineForm {
@@ -173,6 +180,7 @@ function lineToForm(l: Line): LineForm {
     weightTolerancePercent: l.weightTolerancePercent?.toString() ?? "",
     marginPercent: l.marginPercent?.toString() ?? "",
     tradingItemId: l.tradingItemId ?? "",
+    qtyPerSet: l.qtyPerSet?.toString() ?? "1",
   };
 }
 
@@ -207,7 +215,12 @@ function defaultDescription(f: LineForm, gradeLabel: string): string {
  * `null` or the stale value survives server-side (e.g. a leftover
  * developedCutLengthMm silently rerouting a Stud line to the Anchor formula).
  */
-function formToBody(f: LineForm, mode: "add" | "edit", gradeLabel = ""): Record<string, unknown> {
+function formToBody(
+  f: LineForm,
+  mode: "add" | "edit",
+  gradeLabel = "",
+  kind: "item" | "set" | "component" = "item",
+): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   const set = (key: string, raw: string, parse: (s: string) => unknown = (s) => s) => {
     if (raw) {
@@ -216,6 +229,18 @@ function formToBody(f: LineForm, mode: "add" | "edit", gradeLabel = ""): Record<
       body[key] = null;
     }
   };
+
+  // A set has no product of its own — only a name, how many are ordered, and
+  // the components underneath it. Sending the item fields would attach a
+  // family and grade the calculator would then try to price directly.
+  if (kind === "set") {
+    if (mode === "add") body.lineKind = "set";
+    set("description", f.description);
+    set("qty", f.qty, Number);
+    return body;
+  }
+
+  if (mode === "add" && kind === "component") body.lineKind = "component";
 
   set("route", f.route);
   set("productFamily", f.productFamily);
@@ -228,7 +253,10 @@ function formToBody(f: LineForm, mode: "add" | "edit", gradeLabel = ""): Record<
   set("diameterMm", f.diameterMm, Number);
   set("lengthMm", f.lengthMm, Number);
   set("developedCutLengthMm", f.developedCutLengthMm, Number);
-  set("qty", f.qty, Number);
+  // A component's produced quantity is qtyPerSet x the set's qty, worked out
+  // server-side at calculation; its own qty column stays unused.
+  if (kind === "component") body.qtyPerSet = Number(f.qtyPerSet || 1);
+  else set("qty", f.qty, Number);
   set("leadTimeDays", f.leadTimeDays, Number);
   set("coatingCode", f.coatingCode);
   set("diesOption", f.diesOption);
@@ -261,7 +289,15 @@ export function Workspace(props: {
   const router = useRouter();
   const [costing, setCosting] = useState(props.initialCosting);
   const [lines, setLines] = useState(props.initialLines);
-  const [panel, setPanel] = useState<{ mode: "closed" | "add" | "edit"; lineId?: string }>({ mode: "closed" });
+  // `kind` says what is being edited; `parentLineId` is set only while adding a
+  // component, since that is the one case where the target set is not
+  // recoverable from the line being edited.
+  const [panel, setPanel] = useState<{
+    mode: "closed" | "add" | "edit";
+    kind?: "item" | "set" | "component";
+    lineId?: string;
+    parentLineId?: string;
+  }>({ mode: "closed" });
   const [form, setForm] = useState<LineForm>(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -277,7 +313,14 @@ export function Workspace(props: {
   const [reassignReason, setReassignReason] = useState("");
   const [preview, setPreview] = useState<{
     totalExPpn: number;
-    lines: { lineNo: number; description: string | null; qty: number; unitSellingPrice: number; orderTotal: number }[];
+    lines: {
+      lineNo: number;
+      description: string | null;
+      qty: number;
+      unitSellingPrice: number;
+      orderTotal: number;
+      components: { description: string | null; qtyPerSet: number }[];
+    }[];
     quotationNo: string | null;
   } | null>(null);
   const [lookups, setLookups] = useState<Lookups>(EMPTY_LOOKUPS);
@@ -358,13 +401,25 @@ const CUSTOMER_ADD_NEW = "__add_new__";
 
   function openAddPanel() {
     setForm(EMPTY_FORM);
-    setPanel({ mode: "add" });
+    setPanel({ mode: "add", kind: "item" });
+    setError(null);
+  }
+
+  function openAddSetPanel() {
+    setForm({ ...EMPTY_FORM, route: "CUSTOM" });
+    setPanel({ mode: "add", kind: "set" });
+    setError(null);
+  }
+
+  function openAddComponentPanel(set: Line) {
+    setForm({ ...EMPTY_FORM, route: "CUSTOM" });
+    setPanel({ mode: "add", kind: "component", parentLineId: set.costingLineId });
     setError(null);
   }
 
   function openEditPanel(line: Line) {
     setForm(lineToForm(line));
-    setPanel({ mode: "edit", lineId: line.costingLineId });
+    setPanel({ mode: "edit", kind: line.lineKind, lineId: line.costingLineId });
     setError(null);
   }
 
@@ -374,13 +429,17 @@ const CUSTOMER_ADD_NEW = "__add_new__";
     setError(null);
     try {
       const gradeLabel = gradeLabelFor(form.productFamily, form.gradeInput) ?? "";
+      const kind = panel.kind ?? "item";
       if (panel.mode === "add") {
-        await apiPost(`/api/costings/${costing.costingId}/lines`, formToBody(form, "add", gradeLabel));
+        await apiPost(`/api/costings/${costing.costingId}/lines`, {
+          ...formToBody(form, "add", gradeLabel, kind),
+          ...(kind === "component" ? { parentLineId: panel.parentLineId } : {}),
+        });
       } else if (panel.mode === "edit" && panel.lineId) {
         const line = lines.find((l) => l.costingLineId === panel.lineId)!;
         await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
           expectedUpdatedAt: line.updatedAt,
-          ...formToBody(form, "edit", gradeLabel),
+          ...formToBody(form, "edit", gradeLabel, kind),
         });
       }
       setPanel({ mode: "closed" });
@@ -582,6 +641,11 @@ const CUSTOMER_ADD_NEW = "__add_new__";
   const gradeLabels = form.productFamily ? (lookups.gradeLabelsByFamily[form.productFamily] ?? {}) : {};
   const gradeLabelFor = (family: string | null, grade: string | null): string | null =>
     family && grade ? (lookups.gradeLabelsByFamily[family]?.[grade] ?? grade) : grade;
+  /** Fallback label for a line the user never described, used for both items and set components. */
+  const describeLine = (l: Line): string =>
+    `${l.productFamily ?? ""} ${gradeLabelFor(l.productFamily, l.gradeInput) ?? ""} ${l.sizeLabel ?? ""}`.trim();
+  const lineTree = useMemo(() => buildLineTree(lines), [lines]);
+  const panelKind = panel.kind ?? "item";
   const resolvedProfile =
     form.productFamily && form.gradeInput ? lookups.gradeToProfile[form.productFamily]?.[form.gradeInput] : undefined;
   const availableSizes = resolvedProfile ? (lookups.sizesByProfile[resolvedProfile] ?? []) : [];
@@ -785,9 +849,14 @@ const CUSTOMER_ADD_NEW = "__add_new__";
         <div className="section-actions">
           <h2 style={{ marginBottom: 0 }}>Items</h2>
           {canEdit && editableStatus && panel.mode === "closed" && (
-            <button onClick={openAddPanel} className="btn small">
-              + Add Item
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={openAddPanel} className="btn small">
+                + Add Item
+              </button>
+              <button onClick={openAddSetPanel} className="btn secondary small">
+                + Add Set
+              </button>
+            </div>
           )}
         </div>
         <div className="table-scroll">
@@ -806,61 +875,118 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               </tr>
             </thead>
             <tbody>
-              {lines.map((l) => (
-                <tr key={l.costingLineId}>
-                  <td className="mono">{l.lineNo}</td>
-                  <td>
-                    {l.route ? (
-                      <span className="pill neutral">{l.route}</span>
-                    ) : (
-                      <span className="pill danger">belum dipilih</span>
-                    )}
-                  </td>
-                  <td>
-                    {l.description ?? `${l.productFamily ?? ""} ${gradeLabelFor(l.productFamily, l.gradeInput) ?? ""}`}
-                    {l.needsRecalculation && <span className="pill amber" style={{ marginLeft: 6 }}>perlu hitung ulang</span>}
-                    {lineErrors[l.costingLineId] && (
-                      <div className="error-note" style={{ marginTop: 4, marginBottom: 0 }}>
-                        {lineErrors[l.costingLineId]}
-                      </div>
-                    )}
-                  </td>
-                  <td className="mono">{l.qty}</td>
-                  <td className="mono">{fmt(l.latestUnitSellingPrice)}</td>
-                  <td className="mono">{fmt(l.latestOrderTotal)}</td>
-                  <td>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      {canEdit && editableStatus && (
-                        <>
-                          <button
-                            onClick={() => openEditPanel(l)}
-                            className="btn secondary small"
-                            aria-label={`Edit item ${l.lineNo}`}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => deleteLine(l)}
-                            className="icon-btn"
-                            aria-label={`Delete item ${l.lineNo}`}
-                          >
-                            <span aria-hidden="true">✕</span>
-                          </button>
-                        </>
-                      )}
-                      {l.latestUnitSellingPrice !== null && (
+              {lineTree.map(({ line: l, components }, i) => {
+                const displayNo = i + 1;
+                const actions = (line: Line, label: string) => (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {canEdit && editableStatus && (
+                      <>
                         <button
-                          onClick={() => loadExplanation(l)}
+                          onClick={() => openEditPanel(line)}
                           className="btn secondary small"
-                          aria-label={`Explain calculation for item ${l.lineNo}`}
+                          aria-label={`Edit ${label}`}
                         >
-                          Explain
+                          Edit
                         </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        <button onClick={() => deleteLine(line)} className="icon-btn" aria-label={`Delete ${label}`}>
+                          <span aria-hidden="true">✕</span>
+                        </button>
+                      </>
+                    )}
+                    {line.latestUnitSellingPrice !== null && (
+                      <button
+                        onClick={() => loadExplanation(line)}
+                        className="btn secondary small"
+                        aria-label={`Explain calculation for ${label}`}
+                      >
+                        Explain
+                      </button>
+                    )}
+                  </div>
+                );
+
+                return (
+                  <Fragment key={l.costingLineId}>
+                    <tr>
+                      <td className="mono">{displayNo}</td>
+                      <td>
+                        {l.lineKind === "set" ? (
+                          <span className="pill neutral">SET</span>
+                        ) : l.route ? (
+                          <span className="pill neutral">{l.route}</span>
+                        ) : (
+                          <span className="pill danger">belum dipilih</span>
+                        )}
+                      </td>
+                      <td>
+                        {l.description ??
+                          (l.lineKind === "set"
+                            ? defaultSetDescription(
+                                components.map((c) => ({
+                                  description: describeLine(c),
+                                  qtyPerSet: c.qtyPerSet ?? 1,
+                                })),
+                              ) || "Set tanpa nama"
+                            : describeLine(l))}
+                        {l.needsRecalculation && (
+                          <span className="pill amber" style={{ marginLeft: 6 }}>
+                            perlu hitung ulang
+                          </span>
+                        )}
+                        {lineErrors[l.costingLineId] && (
+                          <div className="error-note" style={{ marginTop: 4, marginBottom: 0 }}>
+                            {lineErrors[l.costingLineId]}
+                          </div>
+                        )}
+                      </td>
+                      <td className="mono">{l.qty}</td>
+                      <td className="mono">{fmt(l.latestUnitSellingPrice)}</td>
+                      <td className="mono">{fmt(l.latestOrderTotal)}</td>
+                      <td>{actions(l, `${l.lineKind === "set" ? "set" : "item"} ${displayNo}`)}</td>
+                    </tr>
+
+                    {components.map((c, ci) => (
+                      <tr key={c.costingLineId} className="component-row">
+                        <td />
+                        <td style={{ paddingLeft: 18, color: "var(--muted)" }}>{`${displayNo}.${ci + 1}`}</td>
+                        <td style={{ color: "var(--muted)" }}>
+                          {c.description ?? describeLine(c)}
+                          {lineErrors[c.costingLineId] && (
+                            <div className="error-note" style={{ marginTop: 4, marginBottom: 0 }}>
+                              {lineErrors[c.costingLineId]}
+                            </div>
+                          )}
+                        </td>
+                        {/* Per set, not the produced total — the figure the user typed. */}
+                        <td className="mono" style={{ color: "var(--muted)" }}>{`${c.qtyPerSet ?? 1} / set`}</td>
+                        <td className="mono" style={{ color: "var(--muted)" }}>
+                          {fmt(c.latestUnitSellingPrice)}
+                        </td>
+                        <td />
+                        <td>{actions(c, `component ${displayNo}.${ci + 1}`)}</td>
+                      </tr>
+                    ))}
+
+                    {l.lineKind === "set" && (
+                      <tr className="component-row">
+                        <td />
+                        <td colSpan={6} style={{ paddingLeft: 18 }}>
+                          {canEdit && editableStatus && panel.mode === "closed" && (
+                            <button onClick={() => openAddComponentPanel(l)} className="btn secondary small">
+                              + Add Component
+                            </button>
+                          )}
+                          {components.length === 0 && (
+                            <span className="pill danger" style={{ marginLeft: 8 }}>
+                              set kosong
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
               {lines.length === 0 && (
                 <tr>
                   <td colSpan={7} className="empty-state">
@@ -889,8 +1015,34 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             zIndex: 100,
           }}
         >
-          <h2 style={{ fontSize: 16, marginBottom: 16 }}>{panel.mode === "add" ? "Add Item" : "Edit Item"}</h2>
+          <h2 style={{ fontSize: 16, marginBottom: 16 }}>
+            {panel.mode === "add" ? "Add" : "Edit"}{" "}
+            {panelKind === "set" ? "Set" : panelKind === "component" ? "Component" : "Item"}
+          </h2>
 
+          {panelKind === "set" && (
+            <>
+              <p className="hint" style={{ marginTop: 0 }}>
+                Sebuah set dihargai dari komponennya. Isi nama dan jumlah set di sini, lalu tambahkan komponen dari
+                tabel.
+              </p>
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">Description</span>
+                <input
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="mis. Hex Bolt c/w Hex Nut, Washer"
+                />
+              </label>
+              <label className="field" style={{ marginBottom: 12 }}>
+                <span className="field-label">Qty (jumlah set)</span>
+                <input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
+              </label>
+            </>
+          )}
+
+          {panelKind !== "set" && (
+            <>
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Route</span>
             <select
@@ -1102,10 +1254,26 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             </select>
           </label>
 
-          <label className="field" style={{ marginBottom: 12 }}>
-            <span className="field-label">Qty</span>
-            <input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
-          </label>
+          {panelKind === "component" ? (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Qty per set</span>
+              <input
+                type="number"
+                min={1}
+                value={form.qtyPerSet}
+                onChange={(e) => setForm({ ...form, qtyPerSet: e.target.value })}
+              />
+              <span className="hint">
+                Berapa buah komponen ini dalam satu set. Jumlah yang diproduksi = angka ini x jumlah set, dan itulah
+                yang dipakai untuk potongan kuantitas dan pembagian biaya dies.
+              </span>
+            </label>
+          ) : (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Qty</span>
+              <input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
+            </label>
+          )}
 
           {form.route === "TRADING" && (
             <label className="field" style={{ marginBottom: 12 }}>
@@ -1117,6 +1285,8 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                 onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
               />
             </label>
+          )}
+            </>
           )}
 
           {error && (
@@ -1143,6 +1313,14 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               <div key={l.lineNo}>
                 <TicketLine label={l.description ?? `Item #${l.lineNo}`} value={fmt(l.orderTotal)} />
                 <TicketLine label={`${l.qty} × ${fmt(l.unitSellingPrice)}`} value="" sub />
+                {l.components.map((c, ci) => (
+                  <TicketLine
+                    key={ci}
+                    label={`    • ${c.qtyPerSet > 1 ? `${c.qtyPerSet}x ` : ""}${c.description ?? "—"}`}
+                    value=""
+                    sub
+                  />
+                ))}
               </div>
             ))}
           </Ticket>

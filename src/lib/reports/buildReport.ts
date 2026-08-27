@@ -122,6 +122,9 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
          ORDER BY s.created_at DESC LIMIT 1
        ) latest ON true
        WHERE cl.costing_id = ch.costing_id AND cl.deleted_at IS NULL
+         -- Top-level only: a set component's price is already inside its set
+         -- line's total (DEC-017), so including both would inflate revenue.
+         AND cl.parent_line_id IS NULL
      ) totals ON true
      WHERE ${clause}
      ORDER BY ch.created_at DESC`,
@@ -147,6 +150,11 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
      FROM costing_headers ch
      LEFT JOIN users u ON u.user_id = ch.owner_user_id
      JOIN costing_lines cl ON cl.costing_id = ch.costing_id AND cl.deleted_at IS NULL
+       -- The line sheet lists what the customer was quoted, one row per
+       -- quotation line, so a set appears once at its set price rather than
+       -- exploded into components. Summing this column then matches the
+       -- summary sheet instead of double-counting assemblies.
+       AND cl.parent_line_id IS NULL
      LEFT JOIN LATERAL (
        SELECT s.unit_selling_price, s.order_total FROM line_calculation_snapshots s
        WHERE s.costing_line_id = cl.costing_line_id

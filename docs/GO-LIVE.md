@@ -83,13 +83,23 @@ the line and confirm the resolved rules are the ones you expect.
 If the number is right but a rule looks wrong, the price is right by accident.
 Treat that as a failure.
 
-**7. Check the quotation output.**
+**7. Price one set.**
+
+Most of what the team quotes is an assembly (DEC-017), so smoke-test one too:
+add a Set, give it two components with a quantity per set above one, and check
+that the set price equals the sum of the component prices times their per-set
+counts. Open **Explain** on the set — it lists the components with the quantity
+each will actually be manufactured in, which is what the quantity break and
+dies amortisation used.
+
+**8. Check the quotation output.**
 
 Finalize that costing and download the XLSX. Confirm the letterhead, terms,
-payment terms and salesperson name are correct, and that the total excludes
-PPN.
+payment terms and salesperson name are correct, that the total excludes PPN,
+and that a set appears as **one** priced line with its components listed under
+it — not as separately priced rows.
 
-**8. Hand over.**
+**9. Hand over.**
 
 Point users at the app. Keep the previous process available for the first
 week — the point of a pilot is that you can still fall back.
@@ -132,6 +142,11 @@ revert that breaks something else is caught before it lands.
   (M64), because the metric card stops there. Confirm those quotes by hand.
 - **Grade 4.6 at 3-1/4" and 3-1/2"** is deliberately unpriced: no raw bar is
   stocked that large. The app will refuse rather than invent a price.
+- **Set components price on the produced quantity, not the set count**
+  (DEC-017). A set of 300 with 2 nuts each prices those nuts as 600 pieces, so
+  a component can land in a quantity band the set count alone would not reach,
+  and dies amortise over the larger run. If a set looks cheaper than the team
+  expects, check the band on the component's Explain first.
 - **Logs.** Every request emits one JSON line with method, path, status,
   duration and `requestId` — the same `requestId` recorded on `audit_events`,
   so a reported bad quote can be traced across both.

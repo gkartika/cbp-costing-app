@@ -1,7 +1,12 @@
+export type LineKind = "item" | "set" | "component";
+
 export type CostingLineRow = {
   costing_line_id: string;
   costing_id: string;
   line_no: number;
+  line_kind: LineKind;
+  parent_line_id: string | null;
+  qty_per_set: number | null;
   route: string | null;
   product_family: string | null;
   description: string | null;
@@ -37,6 +42,9 @@ export function serializeCostingLine(row: CostingLineRow, hasCurrentSnapshot: bo
     costingLineId: row.costing_line_id,
     costingId: row.costing_id,
     lineNo: row.line_no,
+    lineKind: row.line_kind,
+    parentLineId: row.parent_line_id,
+    qtyPerSet: row.qty_per_set,
     route: row.route,
     productFamily: row.product_family,
     description: row.description,

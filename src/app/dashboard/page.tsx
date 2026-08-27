@@ -46,6 +46,10 @@ export default async function DashboardPage() {
          LIMIT 1
        ) latest ON true
        WHERE cl.costing_id = ch.costing_id AND cl.deleted_at IS NULL
+         -- Set components carry their own snapshot so each stays explainable;
+         -- their value is already inside the set line's total, so summing them
+         -- too would count every assembly twice.
+         AND cl.parent_line_id IS NULL
      ) totals ON true
      WHERE ch.deleted_at IS NULL
      ORDER BY ch.created_at DESC

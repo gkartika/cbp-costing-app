@@ -33,6 +33,15 @@ export const GET = apiHandler(async (_req: NextRequest, ctx) => {
 });
 
 const CreateLineSchema = z.object({
+  /**
+   * "item" is a standalone product (the default, and everything that existed
+   * before DEC-017). "set" is a customer-facing assembly whose price comes
+   * from its components. "component" is one part inside a set, and is the only
+   * kind that carries parentLineId/qtyPerSet.
+   */
+  lineKind: z.enum(["item", "set", "component"]).optional(),
+  parentLineId: z.string().optional(),
+  qtyPerSet: z.number().int().min(1).optional(),
   route: z.enum(["TRADING", "CUSTOM"]).optional(),
   productFamily: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
@@ -63,7 +72,30 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
   const body = CreateLineSchema.safeParse(await req.json());
   if (!body.success) throw Errors.validation("Data item tidak valid.");
 
+  const lineKind = body.data.lineKind ?? "item";
+  // The DB constraints enforce the same shape, but a 500 from a check
+  // violation tells the user nothing; these say which field is wrong.
+  if (lineKind === "component") {
+    if (!body.data.parentLineId) throw Errors.validation("Komponen harus punya set induk.");
+    if (!body.data.qtyPerSet) throw Errors.validation("Isi jumlah per set untuk komponen.");
+  } else if (body.data.parentLineId || body.data.qtyPerSet) {
+    throw Errors.validation("Hanya komponen yang punya set induk dan jumlah per set.");
+  }
+
   const line = await withTransaction(async (client) => {
+    if (lineKind === "component") {
+      // A component may only hang off a set line in this same costing —
+      // otherwise a crafted parentLineId could attach it to another user's
+      // costing, or nest a set inside a set, which nothing here can price.
+      const { rows: parentRows } = await client.query<{ line_kind: string }>(
+        `SELECT line_kind FROM costing_lines
+         WHERE costing_line_id = $1 AND costing_id = $2 AND deleted_at IS NULL`,
+        [body.data.parentLineId, id],
+      );
+      if (parentRows.length === 0) throw Errors.notFound("Set induk");
+      if (parentRows[0].line_kind !== "set") throw Errors.validation("Komponen hanya bisa ditambahkan ke sebuah set.");
+    }
+
     const { rows: maxRow } = await client.query<{ max: number | null }>(
       `SELECT MAX(line_no) AS max FROM costing_lines WHERE costing_id = $1`,
       [id],
@@ -73,15 +105,19 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
 
     const { rows } = await client.query<CostingLineRow>(
       `INSERT INTO costing_lines
-         (costing_line_id, costing_id, line_no, route, product_family, description, grade_input, thread_condition,
+         (costing_line_id, costing_id, line_no, line_kind, parent_line_id, qty_per_set,
+          route, product_family, description, grade_input, thread_condition,
           size_label, diameter_mm, length_mm, developed_cut_length_mm, qty, lead_time_days, coating_code,
           dies_option, dies_total_cost, weight_tolerance_percent, margin_percent, trading_item_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING *`,
       [
         lineId,
         id,
         lineNo,
+        lineKind,
+        body.data.parentLineId ?? null,
+        body.data.qtyPerSet ?? null,
         body.data.route ?? null,
         body.data.productFamily ?? null,
         body.data.description ?? null,
@@ -101,6 +137,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
         body.data.tradingItemId ?? null,
       ],
     );
+
+    // A new component changes the set price above it, and staleness is judged
+    // per line — so the parent must be marked too or finalize would accept the
+    // set's pre-existing snapshot as current.
+    if (lineKind === "component") {
+      await client.query(`UPDATE costing_lines SET updated_at = now() WHERE costing_line_id = $1`, [
+        body.data.parentLineId,
+      ]);
+    }
 
     // A new/changed line invalidates the costing's Calculated status until recalculated.
     if (before.status === "calculated") {

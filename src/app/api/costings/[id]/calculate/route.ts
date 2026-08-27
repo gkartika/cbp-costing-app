@@ -8,6 +8,7 @@ import { generateId } from "@/lib/ids";
 import { writeAuditEvent } from "@/lib/audit/writeAuditEvent";
 import { loadCostingHeader } from "@/lib/costings/loadCosting";
 import { deriveSizeLabel, type CostingLineRow } from "@/lib/costings/lines";
+import { effectiveComponentQty, sumSet, type PricedComponent } from "@/lib/costings/sets";
 import { loadGuideContext } from "@/lib/calc/loadGuideContext";
 import { calculateCustomLine, type CustomLineInput } from "@/lib/calc/customPipeline";
 import { calculateTradingPricelistLine, calculateTradingQuoteLine } from "@/lib/calc/tradingPipeline";
@@ -55,9 +56,36 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
   const outcomes: LineCalcOutcome[] = [];
   const lineErrors: { lineId: string; code: string; message: string }[] = [];
 
+  // Components carry the priced item; the set line above them is arithmetic
+  // over the results, so components must be priced first. Both end up in
+  // line_calculation_snapshots — the component rows are what make a set's
+  // price explainable, the set row is what every total already reads.
+  const componentsByParent = new Map<string, CostingLineRow[]>();
   for (const line of lines) {
+    if (line.parent_line_id === null) continue;
+    const siblings = componentsByParent.get(line.parent_line_id);
+    if (siblings) siblings.push(line);
+    else componentsByParent.set(line.parent_line_id, [line]);
+  }
+
+  const pricedById = new Map<string, LineCalcOutcome>();
+  for (const line of lines) {
+    if (line.line_kind === "set") continue;
     try {
-      outcomes.push(await calculateOneLine(guideCtx, line));
+      const setQty = line.parent_line_id ? (lines.find((l) => l.costing_line_id === line.parent_line_id)?.qty ?? 0) : 0;
+      const outcome = await calculateOneLine(guideCtx, line, setQty);
+      pricedById.set(line.costing_line_id, outcome);
+      outcomes.push(outcome);
+    } catch (err) {
+      const appError = toAppError(err);
+      lineErrors.push({ lineId: line.costing_line_id, code: appError.code, message: appError.userMessage });
+    }
+  }
+
+  for (const line of lines) {
+    if (line.line_kind !== "set") continue;
+    try {
+      outcomes.push(rollUpSet(line, componentsByParent.get(line.costing_line_id) ?? [], pricedById));
     } catch (err) {
       const appError = toAppError(err);
       lineErrors.push({ lineId: line.costing_line_id, code: appError.code, message: appError.userMessage });
@@ -131,15 +159,92 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
   return NextResponse.json(result);
 });
 
+/**
+ * A set's price is the sum of its priced components, each multiplied by how
+ * many go in one set. It gets a snapshot row like any other line, so the
+ * dashboard, reports, quotation and finalize checks read it through the same
+ * latest-snapshot join they already use — with the aggregating queries
+ * restricted to top-level lines so components are not counted a second time.
+ *
+ * There is no rounding step here: each component is already on the rounding
+ * grid, so their total is too.
+ */
+function rollUpSet(
+  line: CostingLineRow,
+  components: CostingLineRow[],
+  pricedById: Map<string, LineCalcOutcome>,
+): LineCalcOutcome {
+  if (!line.qty || line.qty < 1) throw Errors.qtyInvalid();
+  const setQty = line.qty;
+  if (components.length === 0) {
+    throw Errors.validation(`Set #${line.line_no} belum punya komponen — tambahkan minimal satu.`);
+  }
+
+  const priced: PricedComponent[] = [];
+  for (const c of components) {
+    const outcome = pricedById.get(c.costing_line_id);
+    // A component that failed to price already recorded its own lineError, so
+    // the request is failing regardless; bail rather than quote a partial set.
+    if (!outcome) throw Errors.validation(`Komponen pada set #${line.line_no} gagal dihitung.`);
+    priced.push({
+      qtyPerSet: c.qty_per_set ?? 1,
+      basePricePerItem: outcome.basePricePerItem,
+      coatingPricePerItem: outcome.coatingPricePerItem,
+      diesPricePerItem: outcome.diesPricePerItem,
+      unitSellingPrice: outcome.unitSellingPrice,
+    });
+  }
+
+  const totals = sumSet(priced, setQty);
+  const componentRefs = components.flatMap((c) => pricedById.get(c.costing_line_id)?.resolvedRuleRefs ?? []);
+
+  return {
+    lineId: line.costing_line_id,
+    profileResolved: null,
+    // Weight is per-item and a set has no single item; the component snapshots
+    // carry their own weights, and inventing a summed one here would put a
+    // number on the Explain panel that means nothing.
+    rawWeightPerItemKg: null,
+    costingWeightPerItemKg: null,
+    basePricePerItem: totals.basePricePerSet,
+    coatingPricePerItem: totals.coatingPricePerSet,
+    diesPricePerItem: totals.diesPricePerSet,
+    unitPriceBeforeRounding: totals.pricePerSet,
+    unitSellingPrice: totals.pricePerSet,
+    orderTotal: totals.orderTotal,
+    resolvedRuleRefs: componentRefs,
+    inputSnapshot: {
+      lineKind: "set",
+      setQty,
+      components: components.map((c) => ({
+        costingLineId: c.costing_line_id,
+        description: c.description,
+        productFamily: c.product_family,
+        gradeInput: c.grade_input,
+        sizeLabel: c.size_label,
+        qtyPerSet: c.qty_per_set,
+        manufacturedQty: effectiveComponentQty(c.qty_per_set ?? 1, setQty),
+        unitSellingPrice: pricedById.get(c.costing_line_id)?.unitSellingPrice ?? null,
+      })),
+    },
+  };
+}
+
 async function calculateOneLine(
   guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
   line: CostingLineRow,
+  setQty: number,
 ): Promise<LineCalcOutcome> {
   if (!line.route) throw Errors.routeRequired();
-  if (!line.qty || line.qty < 1) throw Errors.qtyInvalid();
+  // A component's own qty column is unused: what gets made is qty_per_set
+  // times the number of sets ordered, and that is the figure the quantity
+  // break and dies amortisation must both see.
+  const effectiveQty =
+    line.line_kind === "component" ? effectiveComponentQty(line.qty_per_set ?? 1, setQty) : (line.qty ?? 0);
+  if (effectiveQty < 1) throw Errors.qtyInvalid();
 
   const diameterMm = line.diameter_mm !== null ? Number(line.diameter_mm) : null;
-  const qty = line.qty;
+  const qty = effectiveQty;
   const leadTimeDays = line.lead_time_days;
   const lengthMm = line.length_mm !== null ? Number(line.length_mm) : null;
   const developedCutLengthMm = line.developed_cut_length_mm !== null ? Number(line.developed_cut_length_mm) : null;
