@@ -47,3 +47,4 @@ next-env.d.ts
 # database backups contain real business/customer data — never commit these
 /backups/*.backup
 /scratch-guide-package.xlsx
+.cache/

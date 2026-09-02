@@ -19,6 +19,7 @@
     "backup": "dotenv -e .env.local -- tsx scripts/backup-db.ts",
     "restore": "tsx scripts/restore-db.ts",
     "export:guide": "dotenv -e .env.local -- tsx scripts/export-guide.ts",
+    "backtest:legacy": "dotenv -e .env.local -- tsx scripts/backtest-legacy.ts",
     "provision": "tsx scripts/provision.ts"
   },
   "dependencies": {

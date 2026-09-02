@@ -222,8 +222,11 @@ condition with a thread length, not be discarded.
    the guide. Confirm the rate cards cover it as thoroughly as Hex.
 3. **Washers are unpriced** — 30 rate rows and no `F436`. They appear in
    thousands of kits.
-4. **The 3,085 clean formula rows should become a backtest** before go-live.
-   This is the cheapest large-scale validation available.
+4. ~~**The 3,085 clean formula rows should become a backtest**~~ **Done** —
+   `npm run backtest:legacy`, results in
+   [BACKTEST-FINDINGS.md](BACKTEST-FINDINGS.md). It found that 18 metric sizes
+   have no raw-bar upsizing (M20 and M30 among them), which under-weights and
+   so under-prices every bolt at those sizes by 15–18%.
 5. Import order once the above is settled: 159 customers → 10 salespeople →
    grade aliases → 2,149 quotations → 10,619 lines.
 
