@@ -128,7 +128,7 @@ export function resolveEffectiveWidthCorner(sizeGuide: MaterialSizeGuideRow): nu
 }
 
 /**
- * 06_RULE_ENGINE step 13: raw base = costing_weight x price_per_kg, exact guide match required.
+ * 06_RULE_ENGINE step 13: raw base = costing_weight x price_per_kg.
  *
  * A family+grade+size combo can have more than one priced row when the real
  * guide distinguishes by thread condition (Bolt HT vs FT — same grade and
@@ -142,22 +142,29 @@ export function resolveEffectiveWidthCorner(sizeGuide: MaterialSizeGuideRow): nu
  * A discriminator of `undefined` means the caller doesn't use that dimension
  * for this family at all — skip it. `null` means "match a row where the
  * field itself is unset" (e.g. no thread condition was selected yet).
+ *
+ * When no row exists at the exact size, the SAME grade's smallest priced size
+ * at or above the requested diameter is used instead (business decision
+ * 2026-09-04 — e.g. Nut A563 has no card entry below M27, matching grade
+ * 4.6's own floor, so an M20 line takes the M27 rate). This never crosses
+ * into a different grade and never falls back to a smaller size, either of
+ * which would misrepresent what was actually quoted. It only runs when the
+ * exact size has no row at all; an ambiguous exact match (ranked above) is a
+ * missing discriminator, not a missing size, and is rejected as before.
+ * Requires the caller to pass `nominalDiameterMm` — omitted, the fallback is
+ * skipped and behaviour is unchanged.
  */
 export function resolvePricePerKg(
   ctx: GuideContext,
   productFamily: string,
   canonicalGrade: string,
   sizeLabel: string,
-  discriminators: { threadCondition?: string | null; productTypeLabel?: string | null } = {},
+  discriminators: { threadCondition?: string | null; productTypeLabel?: string | null; nominalDiameterMm?: number } = {},
 ): { pricePerKg: number; ref: ResolvedRuleRef } {
-  const candidates = ctx.pricePerKg.filter(
-    (r) => r.productFamily === productFamily && r.gradeOrSpec === canonicalGrade && r.sizeLabel === sizeLabel,
-  );
-  if (candidates.length === 0) throw Errors.priceGuideNotFound();
-
-  let row = candidates[0];
-  if (candidates.length > 1) {
-    const narrowed = candidates.filter((r) => {
+  const narrow = (rows: (typeof ctx.pricePerKg)[number][]) => {
+    if (rows.length === 0) return null;
+    if (rows.length === 1) return rows[0];
+    const narrowed = rows.filter((r) => {
       const threadOk =
         discriminators.threadCondition === undefined ? true : r.threadCondition === discriminators.threadCondition;
       const typeOk =
@@ -168,11 +175,43 @@ export function resolvePricePerKg(
             : (r.productType ?? "").toLowerCase().includes(discriminators.productTypeLabel.toLowerCase());
       return threadOk && typeOk;
     });
-    if (narrowed.length !== 1) throw Errors.priceGuideNotFound();
-    row = narrowed[0];
+    return narrowed.length === 1 ? narrowed[0] : null;
+  };
+
+  const exact = ctx.pricePerKg.filter(
+    (r) => r.productFamily === productFamily && r.gradeOrSpec === canonicalGrade && r.sizeLabel === sizeLabel,
+  );
+  if (exact.length > 0) {
+    const row = narrow(exact);
+    if (!row) throw Errors.priceGuideNotFound();
+    return { pricePerKg: row.sellingPricePerKg, ref: { table: "price_per_kg", id: row.priceId } };
   }
 
-  return { pricePerKg: row.sellingPricePerKg, ref: { table: "price_per_kg", id: row.priceId } };
+  if (discriminators.nominalDiameterMm !== undefined) {
+    const bigger = ctx.pricePerKg.filter(
+      (r) =>
+        r.productFamily === productFamily &&
+        r.gradeOrSpec === canonicalGrade &&
+        r.diameterMm !== null &&
+        r.diameterMm >= discriminators.nominalDiameterMm! - 1e-9,
+    );
+    const ascendingDiameters = [...new Set(bigger.map((r) => r.diameterMm!))].sort((a, b) => a - b);
+    for (const d of ascendingDiameters) {
+      const row = narrow(bigger.filter((r) => r.diameterMm === d));
+      if (row) {
+        return {
+          pricePerKg: row.sellingPricePerKg,
+          ref: {
+            table: "price_per_kg",
+            id: row.priceId,
+            note: `Tidak ada harga di ukuran ${sizeLabel}; menggunakan ukuran lebih besar berikutnya (${row.sizeLabel}) pada grade yang sama (${canonicalGrade}).`,
+          },
+        };
+      }
+    }
+  }
+
+  throw Errors.priceGuideNotFound();
 }
 
 function inRange(rule: AdjustmentRuleRow, value: number): boolean {

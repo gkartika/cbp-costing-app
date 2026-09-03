@@ -57,6 +57,8 @@ export type PricePerKgRow = {
   productFamily: string;
   gradeOrSpec: string;
   sizeLabel: string | null;
+  /** Null only for rows imported before this column was required to be filled; such rows can't take part in the next-bigger-size fallback. */
+  diameterMm: number | null;
   sellingPricePerKg: number;
   threadCondition: string | null;
   productType: string | null;

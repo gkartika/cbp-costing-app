@@ -650,6 +650,7 @@ describe("resolvePricePerKg: thread_condition/product_type disambiguation", () =
         productFamily: "Bolt",
         gradeOrSpec: "A325",
         sizeLabel: "M14",
+        diameterMm: 14,
         sellingPricePerKg: 0,
         threadCondition: null,
         productType: null,
@@ -691,6 +692,7 @@ describe("resolvePricePerKg: thread_condition/product_type disambiguation", () =
           productFamily: "Stud / Anchor",
           gradeOrSpec: "12.9",
           sizeLabel: "M16",
+          diameterMm: 16,
           sellingPricePerKg: 60000,
           threadCondition: "FT",
           productType: "Anchor Bolt",
@@ -700,6 +702,7 @@ describe("resolvePricePerKg: thread_condition/product_type disambiguation", () =
           productFamily: "Stud / Anchor",
           gradeOrSpec: "12.9",
           sizeLabel: "M16",
+          diameterMm: 16,
           sellingPricePerKg: 65000,
           threadCondition: "FT",
           productType: "Stud Bolt FT",
@@ -712,6 +715,98 @@ describe("resolvePricePerKg: thread_condition/product_type disambiguation", () =
     expect(
       resolvePricePerKg(c, "Stud / Anchor", "12.9", "M16", { productTypeLabel: "Stud" }).pricePerKg,
     ).toBe(65000);
+  });
+});
+
+describe("AT-PRICE-FALLBACK-001..005: no price at the exact size falls back to the next bigger size, same grade only", () => {
+  function ctxWithSizes(rows: { sizeLabel: string; diameterMm: number; grade?: string; price: number; thread?: string | null }[]): GuideContext {
+    return {
+      ...ctx,
+      pricePerKg: rows.map((r, i) => ({
+        priceId: `ppk-fb-${i}`,
+        productFamily: "Nut",
+        gradeOrSpec: r.grade ?? "A563",
+        sizeLabel: r.sizeLabel,
+        diameterMm: r.diameterMm,
+        sellingPricePerKg: r.price,
+        threadCondition: r.thread ?? null,
+        productType: null,
+      })),
+    };
+  }
+
+  it("real bug report: Nut A563 M20 has no card entry (starts at M27) — resolves via M27 in the same grade", () => {
+    const c = ctxWithSizes([{ sizeLabel: "M27", diameterMm: 27, price: 55000 }]);
+    const { pricePerKg, ref } = resolvePricePerKg(c, "Nut", "A563", "M20", { nominalDiameterMm: 20 });
+    expect(pricePerKg).toBe(55000);
+    expect(ref.table).toBe("price_per_kg");
+    expect(ref.id).toBe("ppk-fb-0");
+    expect(ref.note).toMatch(/M20/);
+    expect(ref.note).toMatch(/M27/);
+  });
+
+  it("picks the SMALLEST size that is still >= requested, not just any bigger one", () => {
+    const c = ctxWithSizes([
+      { sizeLabel: "M36", diameterMm: 36, price: 40000 },
+      { sizeLabel: "M27", diameterMm: 27, price: 55000 },
+      { sizeLabel: "M30", diameterMm: 30, price: 50000 },
+    ]);
+    expect(resolvePricePerKg(c, "Nut", "A563", "M20", { nominalDiameterMm: 20 }).pricePerKg).toBe(55000);
+  });
+
+  it("never falls back to a smaller size, even when one exists", () => {
+    const c = ctxWithSizes([{ sizeLabel: "M14", diameterMm: 14, price: 30000 }]);
+    expect(() => resolvePricePerKg(c, "Nut", "A563", "M20", { nominalDiameterMm: 20 })).toThrow(/PRICE_GUIDE_NOT_FOUND/i);
+  });
+
+  it("never crosses into a different grade, even when that grade has a bigger-size row", () => {
+    const c = ctxWithSizes([{ sizeLabel: "M27", diameterMm: 27, price: 55000, grade: "2H" }]);
+    expect(() => resolvePricePerKg(c, "Nut", "A563", "M20", { nominalDiameterMm: 20 })).toThrow(/PRICE_GUIDE_NOT_FOUND/i);
+  });
+
+  it("without nominalDiameterMm the caller gets the old behaviour — no fallback attempted", () => {
+    const c = ctxWithSizes([{ sizeLabel: "M27", diameterMm: 27, price: 55000 }]);
+    expect(() => resolvePricePerKg(c, "Nut", "A563", "M20")).toThrow(/PRICE_GUIDE_NOT_FOUND/i);
+  });
+
+  it("an ambiguous EXACT match (missing discriminator) still throws — fallback only runs when the size has no row at all", () => {
+    const c = ctxWithSizes([
+      { sizeLabel: "M20", diameterMm: 20, price: 70000, thread: "HT" },
+      { sizeLabel: "M20", diameterMm: 20, price: 75000, thread: "FT" },
+      { sizeLabel: "M27", diameterMm: 27, price: 55000 },
+    ]);
+    // Bolt/Nut discriminators aren't wired for Nut in the real pipeline, but
+    // resolvePricePerKg itself is family-agnostic, so this proves the rule
+    // directly: an ambiguous exact size must not silently fall through to a
+    // bigger size just because narrowing failed.
+    expect(() =>
+      resolvePricePerKg(c, "Nut", "A563", "M20", { nominalDiameterMm: 20 }),
+    ).toThrow(/PRICE_GUIDE_NOT_FOUND/i);
+  });
+
+  it("no row anywhere in the grade throws the same error as before (no card to fall back within)", () => {
+    const c = ctxWithSizes([]);
+    expect(() => resolvePricePerKg(c, "Nut", "A563", "M20", { nominalDiameterMm: 20 })).toThrow(/PRICE_GUIDE_NOT_FOUND/i);
+  });
+
+  it("end to end: calculateCustomLine prices a Nut A563 M20 line via the M27 fallback and records it in resolvedRuleRefs", () => {
+    const r = calculateCustomLine(ctx, {
+      productFamily: "Nut",
+      gradeOrSpec: "A563",
+      sizeLabel: "M20",
+      diameterMm: 20,
+      qty: 100,
+      leadTimeDays: null,
+      lengthMm: null,
+      developedCutLengthMm: null,
+      coatingCode: null,
+      diesOption: null,
+      diesTotalCost: null,
+    });
+    expect(r.pricePerKg).toBe(55000); // the fixture's Nut/A563/M27 rate — no M20 row exists
+    const priceRef = r.resolvedRuleRefs.find((ref) => ref.table === "price_per_kg");
+    expect(priceRef?.note).toMatch(/M20/);
+    expect(priceRef?.note).toMatch(/M27/);
   });
 });
 

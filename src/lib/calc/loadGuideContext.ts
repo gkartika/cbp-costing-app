@@ -93,11 +93,12 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
       product_family: string;
       grade_or_spec: string;
       size_label: string | null;
+      diameter_mm: string | null;
       selling_price_per_kg: string;
       thread_condition: string | null;
       product_type: string | null;
     }>(
-      `SELECT price_id, product_family, grade_or_spec, size_label, selling_price_per_kg, thread_condition, product_type
+      `SELECT price_id, product_family, grade_or_spec, size_label, diameter_mm, selling_price_per_kg, thread_condition, product_type
        FROM price_per_kg WHERE guide_version_id = $1 AND active`,
       [guideVersionId],
     ),
@@ -215,6 +216,7 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
         productFamily: r.product_family,
         gradeOrSpec: r.grade_or_spec,
         sizeLabel: r.size_label,
+        diameterMm: num(r.diameter_mm),
         sellingPricePerKg: Number(r.selling_price_per_kg),
         threadCondition: r.thread_condition,
         productType: r.product_type,

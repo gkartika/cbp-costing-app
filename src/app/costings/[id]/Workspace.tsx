@@ -1379,12 +1379,10 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             <TicketLine label="Before rounding" value={explanation.unitPriceBeforeRounding.toFixed(2)} sub />
             <TicketDivider />
             {explanation.explainedRules.map((r, i) => (
-              <TicketLine
-                key={i}
-                label={r.table}
-                value={(r.row?.source_key as string) ?? r.id}
-                sub
-              />
+              <Fragment key={i}>
+                <TicketLine label={r.table} value={(r.row?.source_key as string) ?? r.id} sub />
+                {r.note && <TicketLine label={r.note} value="" sub />}
+              </Fragment>
             ))}
           </Ticket>
           <TicketTotal

@@ -207,6 +207,7 @@ export function calculateCustomLine(ctx: GuideContext, input: CustomLineInput): 
   const { pricePerKg, ref: priceRef } = resolvePricePerKg(ctx, input.productFamily, canonicalGrade, input.sizeLabel, {
     threadCondition: input.productFamily === "Bolt" ? (input.threadCondition ?? null) : undefined,
     productTypeLabel: input.productFamily === "Stud / Anchor" ? typeLabel : undefined,
+    nominalDiameterMm: input.diameterMm,
   });
   refs.push(priceRef);
 

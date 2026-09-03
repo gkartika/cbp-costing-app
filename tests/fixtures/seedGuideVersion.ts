@@ -290,26 +290,30 @@ async function insertMaterialSizeGuides(gv: string) {
 }
 
 async function insertPricePerKg(gv: string) {
-  // productFamily, grade, sizeLabel, sellingPricePerKg
-  const rows: [string, string, string, number][] = [
-    ["Bolt", "A325", "M14", 70000], // confirmed
-    ["Bolt", "A325", "1", 72000], // Inch size fixture for AT-SIZE-001
-    ["Bolt", "SUS310", "M14", 300000], // representative (real card: 265,000-335,000/kg across sizes)
-    ["Bolt", "A2-70", "M14", 216000], // confirmed (SIM-ALIAS-* use M20 216000; reused here for simplicity)
-    ["Bolt", "A2-70", "M20", 216000], // confirmed
-    ["Nut", "2H", "M20", 64000], // confirmed (SIM-NUT-QTY-400)
-    ["Nut", "A563", "M20", 65000], // representative — regression fixture for Heavy Hex nut grade not named "2H"
-    ["Washer", "A36", "M20", 44000], // confirmed (SIM-WASHER-M20)
-    ["Washer", "F35", "M20", 60000], // confirmed (SIM-WASHER-F35-M20)
-    ["Stud / Anchor", "B7", "M20", 60000], // confirmed (SIM-STUD-M20X1000)
-    ["Stud / Anchor", "A307B", "M20", 45000], // confirmed (SIM-ANCHOR-M20X500)
+  // productFamily, grade, sizeLabel, diameterMm, sellingPricePerKg
+  const rows: [string, string, string, number, number][] = [
+    ["Bolt", "A325", "M14", 14, 70000], // confirmed
+    ["Bolt", "A325", "1", 25.4, 72000], // Inch size fixture for AT-SIZE-001
+    ["Bolt", "SUS310", "M14", 14, 300000], // representative (real card: 265,000-335,000/kg across sizes)
+    ["Bolt", "A2-70", "M14", 14, 216000], // confirmed (SIM-ALIAS-* use M20 216000; reused here for simplicity)
+    ["Bolt", "A2-70", "M20", 20, 216000], // confirmed
+    ["Nut", "2H", "M20", 20, 64000], // confirmed (SIM-NUT-QTY-400)
+    // A563's card genuinely starts at M27 (matches grade 4.6's own floor in
+    // production) — no M20 row on purpose, so a line asking for M20 exercises
+    // the next-bigger-size-in-the-same-grade fallback (business decision
+    // 2026-09-04, reported against real Nut A563 M20).
+    ["Nut", "A563", "M27", 27, 55000],
+    ["Washer", "A36", "M20", 20, 44000], // confirmed (SIM-WASHER-M20)
+    ["Washer", "F35", "M20", 20, 60000], // confirmed (SIM-WASHER-F35-M20)
+    ["Stud / Anchor", "B7", "M20", 20, 60000], // confirmed (SIM-STUD-M20X1000)
+    ["Stud / Anchor", "A307B", "M20", 20, 45000], // confirmed (SIM-ANCHOR-M20X500)
   ];
-  for (const [productFamily, grade, size, price] of rows) {
+  for (const [productFamily, grade, size, diameterMm, price] of rows) {
     await pool.query(
       `INSERT INTO price_per_kg
-         (price_id, guide_version_id, source_key, product_family, grade_or_spec, size_label, selling_price_per_kg)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [generateId("ppk"), gv, `PRICE-${productFamily}-${grade}-${size}`, productFamily, grade, size, price],
+         (price_id, guide_version_id, source_key, product_family, grade_or_spec, size_label, diameter_mm, selling_price_per_kg)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [generateId("ppk"), gv, `PRICE-${productFamily}-${grade}-${size}`, productFamily, grade, size, diameterMm, price],
     );
   }
 }
