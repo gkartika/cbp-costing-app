@@ -142,6 +142,17 @@ revert that breaks something else is caught before it lands.
   (M64), because the metric card stops there. Confirm those quotes by hand.
 - **Grade 4.6 at 3-1/4" and 3-1/2"** is deliberately unpriced: no raw bar is
   stocked that large. The app will refuse rather than invent a price.
+- **Several grades have no card entry at the small end**, across Bolt, Nut and
+  Stud/Anchor — not an isolated case. Confirmed: Nut 4.6/A563 (start M27),
+  Nut 6.8 (M22); Bolt 4.6/5.6/A307 (M27), Bolt 6.8/A307B (M20); Stud/Anchor
+  4.6/A307 (M27), most other Stud/Anchor grades (M18 or M20). A line below a
+  grade's floor no longer fails; it resolves through that grade's next bigger
+  size instead (business decision 2026-09-04, confirmed against the real
+  guide for Nut A563/4.6/6.8 and Bolt A307), and Explain shows a note saying
+  which size was actually used. Worth a spot-check the first time a small-size
+  line hits one of these grades, and worth asking Master Data whether the
+  small end should simply be filled in — this is a coverage gap in the rate
+  card, not something the fallback is meant to paper over indefinitely.
 - **Set components price on the produced quantity, not the set count**
   (DEC-017). A set of 300 with 2 nuts each prices those nuts as 600 pieces, so
   a component can land in a quantity band the set count alone would not reach,
