@@ -20,6 +20,7 @@
     "restore": "tsx scripts/restore-db.ts",
     "export:guide": "dotenv -e .env.local -- tsx scripts/export-guide.ts",
     "backtest:legacy": "dotenv -e .env.local -- tsx scripts/backtest-legacy.ts",
+    "fill:price-gaps": "dotenv -e .env.local -- tsx scripts/fill-price-gaps.ts",
     "provision": "tsx scripts/provision.ts"
   },
   "dependencies": {
