@@ -949,6 +949,36 @@ describe("Costing route rules (SCP-002/AT-WASHER-001/002)", () => {
     expect(f436?.allowedCostingRoute).toBe("Trading");
     expect(a36?.allowedCostingRoute).toBe("Custom Production");
   });
+
+  it("AT-WASHER-003: calculateCustomLine rejects F436 with a route-specific error, not a generic resolution failure", () => {
+    let error: unknown;
+    try {
+      calculateCustomLine(ctx, {
+        productFamily: "Washer",
+        gradeOrSpec: "F436",
+        sizeLabel: "M20",
+        diameterMm: 20,
+        qty: 10,
+        leadTimeDays: null,
+        lengthMm: null,
+        developedCutLengthMm: null,
+        coatingCode: null,
+        diesOption: null,
+        diesTotalCost: null,
+      });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).code).toBe("WRONG_COSTING_ROUTE");
+    expect((error as AppError).userMessage).toMatch(/Trading/);
+  });
+
+  it("AT-WASHER-004: a grade with no costing_route_rules entry at all is unaffected — falls through to normal resolution", () => {
+    // A325 (Bolt) has no route rule in the fixture; must reach its usual
+    // profile/size/price resolution rather than being rejected up front.
+    expect(() => calculateCustomLine(ctx, { ...boltBase })).not.toThrow();
+  });
 });
 
 describe("resolveAdjustmentRule: not-applicable vs. gap distinction", () => {

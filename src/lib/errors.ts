@@ -66,6 +66,12 @@ export const Errors = {
     new AppError("RAW_BAR_UNAVAILABLE", 422, "Tidak ada stok batang bahan baku pada diameter ini atau lebih besar."),
   weightInvalid: () => new AppError("WEIGHT_INVALID", 422, "Berat costing tidak valid."),
   priceGuideNotFound: () => new AppError("PRICE_GUIDE_NOT_FOUND", 422, "Panduan harga per kg tidak ditemukan."),
+  wrongCostingRoute: (grade: string, requiredRoute: string) =>
+    new AppError(
+      "WRONG_COSTING_ROUTE",
+      422,
+      `Grade ${grade} harus di-costing lewat ${requiredRoute}, bukan route ini.`,
+    ),
   adjustmentNoMatch: () =>
     new AppError("ADJUSTMENT_NO_MATCH", 422, "Kondisi quantity/lead time/panjang tidak tersedia dalam panduan."),
   adjustmentAmbiguous: () => new AppError("ADJUSTMENT_AMBIGUOUS", 422, "Panduan adjustment memiliki range overlap."),

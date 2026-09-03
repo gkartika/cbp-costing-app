@@ -90,6 +90,9 @@ export default async function DashboardPage() {
           <a href="/reports" className="link-btn">
             Laporan
           </a>
+          <a href="/customers" className="link-btn">
+            Customers
+          </a>
           {user.roles.includes("super_admin") && (
             <>
               <a href="/admin/master-data" className="link-btn">

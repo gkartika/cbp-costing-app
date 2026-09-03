@@ -89,6 +89,20 @@ export const policy = {
     }
   },
 
+  /** Any authenticated user may register a new customer (business decision 2026-09-04) — the same low bar as today's inline create-by-name. */
+  assertCanCreateCustomer(user: SessionUser): void {
+    if (!hasRole(user, ROLES.COSTING_USER) && !hasRole(user, ROLES.SUPER_ADMIN)) {
+      throw Errors.forbidden();
+    }
+  },
+
+  /** Editing an existing customer — name, segment, markup, payment terms — is Super Admin only. Creating one is a different, wider-open action (assertCanCreateCustomer). */
+  assertCanEditCustomer(user: SessionUser): void {
+    if (!hasRole(user, ROLES.SUPER_ADMIN)) {
+      throw Errors.forbidden();
+    }
+  },
+
   /** VER-004: guide compare/diff is read-only, available to Super Admin and Auditor (not Costing User). */
   assertCanViewGuideDiff(user: SessionUser): void {
     if (!hasRole(user, ROLES.SUPER_ADMIN) && !hasRole(user, ROLES.AUDITOR)) {

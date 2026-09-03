@@ -22,6 +22,7 @@ const EXPLAINABLE_TABLES: Record<string, string> = {
   calculation_formulas: "formula_id",
   material_grade_map: "map_id",
   costing_route_rules: "route_rule_id",
+  customers: "customer_id",
 };
 
 export type ExplainedRule = ResolvedRuleRef & { row: Record<string, unknown> | null };

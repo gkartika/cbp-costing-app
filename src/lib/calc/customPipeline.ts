@@ -154,6 +154,19 @@ export function calculateCustomLine(ctx: GuideContext, input: CustomLineInput): 
   const refs: ResolvedRuleRef[] = [];
   const typeLabel = productTypeLabel(input);
 
+  // costing_route_rules exists precisely for cases like Washer F436, whose
+  // price lives in Trading (a fixed pricelist), not in Price_Per_Kg — picking
+  // Custom Production for it used to fail deep inside profile/size/price
+  // resolution with a generic error that gave no hint the route itself was
+  // wrong. Checked before any of that resolution runs, so the failure names
+  // the actual problem.
+  const routeRule = ctx.costingRouteRules.find(
+    (r) => r.productFamily === input.productFamily && r.gradeOrSpec === input.gradeOrSpec,
+  );
+  if (routeRule && routeRule.allowedCostingRoute !== "Custom Production") {
+    throw Errors.wrongCostingRoute(input.gradeOrSpec, routeRule.allowedCostingRoute);
+  }
+
   const { profile, ref: profileRef } = resolveProfile(ctx, input.productFamily, input.gradeOrSpec);
   refs.push(profileRef);
 

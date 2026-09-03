@@ -280,6 +280,12 @@ function fmt(n: number | null | undefined): string {
   return n === null || n === undefined ? "—" : n.toLocaleString("en-US");
 }
 
+/** Same display rule as the server's lookups (7-day multiples >=14 read as weeks) — pure formatting, not a business value. */
+function formatLeadTimeDays(days: number | null): string {
+  if (days === null) return "—";
+  return days >= 14 && days % 7 === 0 ? `${days / 7} minggu` : `${days} hari`;
+}
+
 export function Workspace(props: {
   initialCosting: Costing;
   initialLines: Line[];
@@ -867,6 +873,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                 <th scope="col">Route</th>
                 <th scope="col">Description</th>
                 <th scope="col">Qty</th>
+                <th scope="col">Lead Time</th>
                 <th scope="col">Unit Price</th>
                 <th scope="col">Order Total</th>
                 <th scope="col">
@@ -940,6 +947,22 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                         )}
                       </td>
                       <td className="mono">{l.qty}</td>
+                      <td className="mono">
+                        {l.lineKind === "set" ? (
+                          (() => {
+                            const distinctLeadTimes = [...new Set(components.map((c) => c.leadTimeDays))];
+                            if (distinctLeadTimes.length === 0) return "—";
+                            if (distinctLeadTimes.length === 1) return formatLeadTimeDays(distinctLeadTimes[0]);
+                            return (
+                              <span className="pill amber" title="Komponen dalam set ini punya lead time berbeda-beda">
+                                campuran
+                              </span>
+                            );
+                          })()
+                        ) : (
+                          formatLeadTimeDays(l.leadTimeDays)
+                        )}
+                      </td>
                       <td className="mono">{fmt(l.latestUnitSellingPrice)}</td>
                       <td className="mono">{fmt(l.latestOrderTotal)}</td>
                       <td>{actions(l, `${l.lineKind === "set" ? "set" : "item"} ${displayNo}`)}</td>
@@ -959,6 +982,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                         </td>
                         {/* Per set, not the produced total — the figure the user typed. */}
                         <td className="mono" style={{ color: "var(--muted)" }}>{`${c.qtyPerSet ?? 1} / set`}</td>
+                        <td className="mono" style={{ color: "var(--muted)" }}>{formatLeadTimeDays(c.leadTimeDays)}</td>
                         <td className="mono" style={{ color: "var(--muted)" }}>
                           {fmt(c.latestUnitSellingPrice)}
                         </td>
@@ -970,7 +994,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                     {l.lineKind === "set" && (
                       <tr className="component-row">
                         <td />
-                        <td colSpan={6} style={{ paddingLeft: 18 }}>
+                        <td colSpan={7} style={{ paddingLeft: 18 }}>
                           {canEdit && editableStatus && panel.mode === "closed" && (
                             <button onClick={() => openAddComponentPanel(l)} className="btn secondary small">
                               + Add Component
@@ -989,7 +1013,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               })}
               {lines.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="empty-state">
+                  <td colSpan={8} className="empty-state">
                     Belum ada item.
                   </td>
                 </tr>

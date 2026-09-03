@@ -12,11 +12,15 @@ import { effectiveComponentQty, sumSet, type PricedComponent } from "@/lib/costi
 import { loadGuideContext } from "@/lib/calc/loadGuideContext";
 import { calculateCustomLine, type CustomLineInput } from "@/lib/calc/customPipeline";
 import { calculateTradingPricelistLine, calculateTradingQuoteLine } from "@/lib/calc/tradingPipeline";
+import { getConfigNumber } from "@/lib/calc/appConfig";
+import { ceilingToIncrement } from "@/lib/calc/rounding";
 import type { ResolvedRuleRef } from "@/lib/calc/types";
 import { Errors, toAppError } from "@/lib/errors";
 
 type LineCalcOutcome = {
   lineId: string;
+  /** The quantity orderTotal was computed from — needed to re-derive orderTotal after a post-hoc price adjustment (customer markup) without re-deriving it from the line row. */
+  qty: number;
   profileResolved: string | null;
   rawWeightPerItemKg: number | null;
   costingWeightPerItemKg: number | null;
@@ -44,6 +48,22 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
   if (publishedVersions.length === 0) throw Errors.guideNotActive();
   const guideVersionId = publishedVersions[0].guide_version_id;
   const guideCtx = await loadGuideContext(guideVersionId);
+
+  // A per-customer markup (business decision 2026-09-04) is a commercial
+  // relationship attribute, not a pricing-guide rule, so it lives on
+  // customers rather than in the versioned guide — but it is still applied
+  // and explained like every other adjustment, just resolved once per
+  // calculate-all pass instead of per line.
+  let customerMarkup: { percent: number; customerId: string } | null = null;
+  if (header.customer_id) {
+    const { rows } = await pool.query<{ customer_id: string; markup_percent: string | null }>(
+      `SELECT customer_id, markup_percent FROM customers WHERE customer_id = $1 AND active = TRUE`,
+      [header.customer_id],
+    );
+    if (rows.length > 0 && rows[0].markup_percent !== null) {
+      customerMarkup = { percent: Number(rows[0].markup_percent), customerId: rows[0].customer_id };
+    }
+  }
 
   const { rows: lines } = await pool.query<CostingLineRow>(
     `SELECT * FROM costing_lines WHERE costing_id = $1 AND deleted_at IS NULL ORDER BY line_no`,
@@ -73,7 +93,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
     if (line.line_kind === "set") continue;
     try {
       const setQty = line.parent_line_id ? (lines.find((l) => l.costing_line_id === line.parent_line_id)?.qty ?? 0) : 0;
-      const outcome = await calculateOneLine(guideCtx, line, setQty);
+      const outcome = await calculateOneLine(guideCtx, line, setQty, customerMarkup);
       pricedById.set(line.costing_line_id, outcome);
       outcomes.push(outcome);
     } catch (err) {
@@ -200,6 +220,7 @@ function rollUpSet(
 
   return {
     lineId: line.costing_line_id,
+    qty: setQty,
     profileResolved: null,
     // Weight is per-item and a set has no single item; the component snapshots
     // carry their own weights, and inventing a summed one here would put a
@@ -230,7 +251,46 @@ function rollUpSet(
   };
 }
 
+/**
+ * Prices one line, then applies the costing's customer markup (if any) as a
+ * final multiplier and re-rounds — deliberately outside priceOneLine, and
+ * after it rather than woven into any one route's steps, so every route
+ * (Custom, Trading pricelist, Trading quote) gets the same treatment without
+ * three separate copies of "multiply by 1+markup, round again." A set's
+ * components each pass through here individually, so a set's total already
+ * carries the markup transitively by the time rollUpSet sums them — applying
+ * it a second time at the set level would double it.
+ */
 async function calculateOneLine(
+  guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
+  line: CostingLineRow,
+  setQty: number,
+  customerMarkup: { percent: number; customerId: string } | null,
+): Promise<LineCalcOutcome> {
+  const priced = await priceOneLine(guideCtx, line, setQty);
+  if (!customerMarkup || customerMarkup.percent === 0) return priced;
+
+  const unitPriceBeforeRounding = priced.unitPriceBeforeRounding * (1 + customerMarkup.percent);
+  const roundingIncrement = getConfigNumber(guideCtx, "ROUNDING_INCREMENT");
+  const unitSellingPrice = ceilingToIncrement(unitPriceBeforeRounding, roundingIncrement);
+
+  return {
+    ...priced,
+    unitPriceBeforeRounding,
+    unitSellingPrice,
+    orderTotal: unitSellingPrice * priced.qty,
+    resolvedRuleRefs: [
+      ...priced.resolvedRuleRefs,
+      {
+        table: "customers",
+        id: customerMarkup.customerId,
+        note: `Kenaikan harga customer: +${(customerMarkup.percent * 100).toFixed(2)}%.`,
+      },
+    ],
+  };
+}
+
+async function priceOneLine(
   guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
   line: CostingLineRow,
   setQty: number,
@@ -280,6 +340,7 @@ async function calculateOneLine(
     const result = calculateCustomLine(guideCtx, input);
     return {
       lineId: line.costing_line_id,
+      qty,
       profileResolved: result.profileResolved,
       rawWeightPerItemKg: result.rawWeightPerItemKg,
       costingWeightPerItemKg: result.costingWeightPerItemKg,
@@ -309,6 +370,7 @@ async function calculateOneLine(
     const result = calculateTradingPricelistLine(guideCtx, pricelistInput);
     return {
       lineId: line.costing_line_id,
+      qty,
       profileResolved: null,
       rawWeightPerItemKg: null,
       costingWeightPerItemKg: null,
@@ -350,6 +412,7 @@ async function calculateOneLine(
     const result = calculateTradingQuoteLine(guideCtx, quoteInput);
     return {
       lineId: line.costing_line_id,
+      qty,
       profileResolved: null,
       rawWeightPerItemKg: null,
       costingWeightPerItemKg: null,
