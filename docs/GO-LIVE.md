@@ -151,6 +151,22 @@ revert that breaks something else is caught before it lands.
   returning, so no quote changed. Explain no longer shows a substitution
   note for these; if one appears for a grade/size not in that list, that's
   a genuinely new gap, not this one recurring.
+- **Washer Custom Production (A36, F35) now actually calculates.** Their
+  material_size_guides rows had never existed in any guide version — every
+  line failed with RAW_SIZE_INVALID regardless of price. Filled 2026-09-04
+  via `npm run fill:washer-dimensions`, sourced from DIN 125 Form A
+  (business-confirmed). A36 and F35 share one `product_profile` ("Washer")
+  in grade_profile_rules, and material_size_guides is keyed on
+  (profile, size), so the two grades cannot carry different dimensions
+  without also splitting that profile — a larger decision than filling
+  geometry, so both currently resolve to the same DIN 125 numbers. Revisit
+  if F35's real structural-washer dimensions (JIS B1186, which only
+  formally covers M20-M33 anyway) need to diverge from A36's.
+  F436 is untouched: it prices via Trading with real `weight_kg` already on
+  every `trading_items` row, so it never touches material_size_guides.
+  Its `thickness` column is mostly still null — cosmetic only, Trading
+  pricing doesn't read it — left unfilled rather than guessed across a
+  0.5"-3"/M14-M72 range with no single authoritative source found.
 - **Set components price on the produced quantity, not the set count**
   (DEC-017). A set of 300 with 2 nuts each prices those nuts as 600 pieces, so
   a component can land in a quantity band the set count alone would not reach,

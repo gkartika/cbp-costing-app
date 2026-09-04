@@ -21,6 +21,7 @@
     "export:guide": "dotenv -e .env.local -- tsx scripts/export-guide.ts",
     "backtest:legacy": "dotenv -e .env.local -- tsx scripts/backtest-legacy.ts",
     "fill:price-gaps": "dotenv -e .env.local -- tsx scripts/fill-price-gaps.ts",
+    "fill:washer-dimensions": "dotenv -e .env.local -- tsx scripts/fill-washer-dimensions.ts",
     "provision": "tsx scripts/provision.ts"
   },
   "dependencies": {
