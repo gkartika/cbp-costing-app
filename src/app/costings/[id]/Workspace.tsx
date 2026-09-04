@@ -309,6 +309,8 @@ export function Workspace(props: {
   const [error, setError] = useState<string | null>(null);
   const [lineErrors, setLineErrors] = useState<Record<string, string>>({});
   const [showPreview, setShowPreview] = useState(false);
+  const [showWaText, setShowWaText] = useState(false);
+  const [waCopied, setWaCopied] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [showExplanation, setShowExplanation] = useState(false);
@@ -551,11 +553,11 @@ const CUSTOMER_ADD_NEW = "__add_new__";
     }
   }
 
-  async function downloadXlsx() {
+  async function downloadExport(format: "xlsx" | "pdf") {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/costings/${costing.costingId}/export`, { method: "POST" });
+      const res = await fetch(`/api/costings/${costing.costingId}/export?format=${format}`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error?.message ?? "Gagal mengekspor quotation.");
@@ -566,7 +568,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = filenameMatch?.[1] ?? `${costing.costingId}.xlsx`;
+      a.download = filenameMatch?.[1] ?? `${costing.costingId}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -651,6 +653,55 @@ const CUSTOMER_ADD_NEW = "__add_new__";
   const describeLine = (l: Line): string =>
     `${l.productFamily ?? ""} ${gradeLabelFor(l.productFamily, l.gradeInput) ?? ""} ${l.sizeLabel ?? ""}`.trim();
   const lineTree = useMemo(() => buildLineTree(lines), [lines]);
+
+  /**
+   * Best-effort match for how CBP actually types a quotation into WhatsApp —
+   * "- DESCRIPTION = qty @price" per item, a set printed as its own
+   * description with components listed under it, and a shared footer only
+   * when every line actually agrees (tax mode is a system-wide constant;
+   * lead time is per-line and often isn't uniform, which is exactly what the
+   * Lead Time column exists to catch — so the footer omits it rather than
+   * print a number that doesn't hold for every line).
+   */
+  function buildWaText(): string {
+    const idNum = (n: number) => n.toLocaleString("id-ID");
+    const blocks: string[] = [];
+    for (const { line: l, components } of lineTree) {
+      if (l.latestUnitSellingPrice === null) continue; // not calculated yet — nothing to quote
+      const desc = (l.description ?? describeLine(l)).toUpperCase();
+      if (l.lineKind === "set") {
+        const compLines = components.map(
+          (c) => `  - ${(c.description ?? describeLine(c)).toUpperCase()}${(c.qtyPerSet ?? 1) > 1 ? ` (${c.qtyPerSet}x)` : ""}`,
+        );
+        blocks.push(
+          [desc, ...compLines, `Qty ${idNum(l.qty ?? 0)} set @ ${idNum(l.latestUnitSellingPrice)}`].join("\n"),
+        );
+      } else {
+        blocks.push(`- ${desc} = ${idNum(l.qty ?? 0)} @ ${idNum(l.latestUnitSellingPrice)}`);
+      }
+    }
+
+    const topLevelLeadTimes = [...new Set(lineTree.map(({ line: l }) => l.leadTimeDays).filter((d) => d !== null))];
+    const footer = ["Exclude PPN"]; // tax_output_mode is a system-wide constant (always EXCLUDE_PPN)
+    if (topLevelLeadTimes.length === 1) footer.push(formatLeadTimeDays(topLevelLeadTimes[0]));
+
+    return [...blocks, "", ...footer].join("\n");
+  }
+
+  function openWaText() {
+    setWaCopied(false);
+    setShowWaText(true);
+  }
+
+  async function copyWaText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setWaCopied(true);
+    } catch {
+      setWaCopied(false);
+    }
+  }
+
   const panelKind = panel.kind ?? "item";
   const resolvedProfile =
     form.productFamily && form.gradeInput ? lookups.gradeToProfile[form.productFamily]?.[form.gradeInput] : undefined;
@@ -732,13 +783,23 @@ const CUSTOMER_ADD_NEW = "__add_new__";
         <button onClick={loadPreview} className="btn secondary small">
           Preview
         </button>
+        {lines.length > 0 && (
+          <button onClick={openWaText} className="btn secondary small">
+            Copy as WA Text
+          </button>
+        )}
         <button onClick={loadAudit} className="btn secondary small">
           Audit Trail
         </button>
         {(costing.status === "finalized" || costing.status === "revised") && (
-          <button onClick={downloadXlsx} disabled={busy} className="btn secondary small">
-            Download XLSX
-          </button>
+          <>
+            <button onClick={() => downloadExport("xlsx")} disabled={busy} className="btn secondary small">
+              Download XLSX
+            </button>
+            <button onClick={() => downloadExport("pdf")} disabled={busy} className="btn secondary small">
+              Download PDF
+            </button>
+          </>
         )}
         {canEdit && editableStatus && (
           <button onClick={calculateAll} disabled={busy || lines.length === 0} className="btn small">
@@ -1353,6 +1414,31 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             <button onClick={() => setShowPreview(false)} className="btn secondary small">
               Close
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {showWaText && (
+        <Modal onClose={() => setShowWaText(false)} width={480} label="Copy as WhatsApp Text">
+          <div style={{ padding: 16 }}>
+            <h2 style={{ fontSize: 15, marginTop: 0 }}>Copy as WA Text</h2>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Format perkiraan seperti biasa ditulis di WhatsApp. Cek dan sesuaikan sebelum dikirim.
+            </p>
+            <textarea
+              readOnly
+              value={buildWaText()}
+              rows={14}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: 12.5, resize: "vertical" }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
+              <button onClick={() => copyWaText(buildWaText())} className="btn small">
+                {waCopied ? "Tersalin!" : "Copy"}
+              </button>
+              <button onClick={() => setShowWaText(false)} className="btn secondary small">
+                Close
+              </button>
+            </div>
           </div>
         </Modal>
       )}
