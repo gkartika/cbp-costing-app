@@ -47,7 +47,10 @@ export const GET = apiHandler(async () => {
   // Structural type discriminator the engine itself switches on (customPipeline
   // splits "Stud / Anchor" further by which length field is filled in) —
   // fixed, not a versioned business value, so it's safe to enumerate here.
-  const productFamilies = ["Bolt", "Nut", "Washer", "Stud / Anchor"];
+  // "Stud / Anchor" is hidden pending the coating-coverage gaps found auditing
+  // HDG/PTFE (2026-09-10) — the engine and existing Stud/Anchor lines are
+  // untouched, this only stops new lines from being started against it.
+  const productFamilies = ["Bolt", "Nut", "Washer"];
 
   const gradesByFamily: Record<string, string[]> = {};
   // grade -> resolved profile, so the client can filter the Size dropdown to
