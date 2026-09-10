@@ -167,6 +167,24 @@ revert that breaks something else is caught before it lands.
   Its `thickness` column is mostly still null — cosmetic only, Trading
   pricing doesn't read it — left unfilled rather than guessed across a
   0.5"-3"/M14-M72 range with no single authoritative source found.
+- **"Zinc" coating priced correctly now — it never did before.** All 68 rows
+  the "Zinc" dropdown option resolved to were dies/tooling cost data
+  (`process_name='Dies'`, `process_group='Tooling'`, `basis='IDR_per_set'`,
+  rates 2.5M-15.6M) mislabeled `display_label='Zinc'` — byte-for-byte
+  duplicates of `dies_cost_guides`. Selecting Zinc multiplied an item's
+  weight in kg by a rate meant to be a flat per-set tooling charge in the
+  millions, as if it were IDR/kg, and couldn't even pick the size-correct
+  row since none of those 68 carried a diameter tier. A migration comment
+  had rationalized this as intentional, citing a "DEC-041" that doesn't
+  exist anywhere in docs/ — nobody had checked it against
+  `docs/LEGACY-DATA-STUDY.md` (Zinc used in 141 real historical quotation
+  lines as its own coating, not a dies-cost alias) or against
+  `dies_cost_guides` itself. Fixed 2026-09-10 via `npm run fix:zinc-coating`:
+  the 68 rows are deactivated and a real `process_name='Zinc'` row was added
+  — IDR 5,000/kg flat, no diameter tiers, applies to every item type
+  (business-confirmed). If "Zinc" pricing ever looks flat/uniform regardless
+  of size again, that's expected — it's the one coating without tiers, unlike
+  HDG and PTFE.
 - **Set components price on the produced quantity, not the set count**
   (DEC-017). A set of 300 with 2 nuts each prices those nuts as 600 pieces, so
   a component can land in a quantity band the set count alone would not reach,

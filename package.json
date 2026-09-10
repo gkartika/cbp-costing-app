@@ -22,6 +22,7 @@
     "backtest:legacy": "dotenv -e .env.local -- tsx scripts/backtest-legacy.ts",
     "fill:price-gaps": "dotenv -e .env.local -- tsx scripts/fill-price-gaps.ts",
     "fill:washer-dimensions": "dotenv -e .env.local -- tsx scripts/fill-washer-dimensions.ts",
+    "fix:zinc-coating": "dotenv -e .env.local -- tsx scripts/fix-zinc-coating.ts",
     "provision": "tsx scripts/provision.ts"
   },
   "dependencies": {
