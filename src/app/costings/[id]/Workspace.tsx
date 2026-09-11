@@ -153,7 +153,7 @@ const EMPTY_FORM: LineForm = {
   qty: "1",
   leadTimeDays: "",
   coatingCode: "",
-  diesOption: "",
+  diesOption: "yes",
   diesTotalCost: "",
   weightTolerancePercent: "",
   marginPercent: "",
@@ -175,7 +175,11 @@ function lineToForm(l: Line): LineForm {
     qty: l.qty?.toString() ?? "1",
     leadTimeDays: l.leadTimeDays?.toString() ?? "",
     coatingCode: l.coatingCode ?? "",
-    diesOption: l.diesOption ?? "",
+    // A stored null means "not decided" from before this field defaulted to
+    // "Ya" — pricing-identical to "yes" (both add zero dies cost), so editing
+    // an old line just shows the equivalent, meaningful option instead of a
+    // blank "n/a" that no longer exists in the dropdown.
+    diesOption: l.diesOption ?? "yes",
     diesTotalCost: l.diesTotalCost?.toString() ?? "",
     weightTolerancePercent: l.weightTolerancePercent?.toString() ?? "",
     marginPercent: l.marginPercent?.toString() ?? "",
@@ -185,26 +189,40 @@ function lineToForm(l: Line): LineForm {
 }
 
 /**
+ * Inch sizes are stored as bare fractions/whole numbers ("3/4", "1"); metric
+ * sizes are already prefixed ("M20"). The quotation needs the inch mark
+ * spelled out only for the former (3/4 -> 3/4", 1 -> 1").
+ */
+function formatSizeForDescription(sizeLabel: string): string {
+  return /^M\d/i.test(sizeLabel) ? sizeLabel : `${sizeLabel}"`;
+}
+
+/**
  * CBP's standard item description, used when the user leaves Description
  * blank so every quotation line reads consistently:
- *   Bolt — "Bolt, A193-B7, HT M20x80"
- *   Nut  — "Nut, A194-2H, M20"
+ *   Bolt   — "Bolt, A193-B7, HT M20x80, HDG"
+ *   Nut    — "Nut, A194-2H, M20, Zinc"
+ *   Washer — "Washer, A36, 3/4", Plain"
  * Uses the grade's display label (A193-B7, not B7) so the quotation shows the
- * full standard designation. Returns "" for families with no agreed format,
- * leaving the existing "family + grade" fallback in the summary untouched.
+ * full standard designation, and always names the size and coating so no line
+ * ships ambiguous about either. Returns "" for families with no agreed
+ * format, leaving the existing "family + grade" fallback in the summary
+ * untouched.
  */
-function defaultDescription(f: LineForm, gradeLabel: string): string {
+function defaultDescription(f: LineForm, gradeLabel: string, coatingLabel: string): string {
   const grade = gradeLabel || f.gradeInput;
-  const size = f.sizeLabel || (f.diameterMm ? `M${f.diameterMm}` : "");
-  if (!f.productFamily || !grade || !size) return "";
+  const rawSize = f.sizeLabel || (f.diameterMm ? `M${f.diameterMm}` : "");
+  if (!f.productFamily || !grade || !rawSize) return "";
+  const size = formatSizeForDescription(rawSize);
+  const coatingSuffix = `, ${coatingLabel || "Plain"}`;
 
   if (f.productFamily === "Bolt") {
     const thread = f.threadCondition ? `${f.threadCondition} ` : "";
     const length = f.lengthMm ? `x${f.lengthMm}` : "";
-    return `${f.productFamily}, ${grade}, ${thread}${size}${length}`;
+    return `${f.productFamily}, ${grade}, ${thread}${size}${length}${coatingSuffix}`;
   }
-  if (f.productFamily === "Nut") {
-    return `${f.productFamily}, ${grade}, ${size}`;
+  if (f.productFamily === "Nut" || f.productFamily === "Washer") {
+    return `${f.productFamily}, ${grade}, ${size}${coatingSuffix}`;
   }
   return "";
 }
@@ -220,6 +238,7 @@ function formToBody(
   mode: "add" | "edit",
   gradeLabel = "",
   kind: "item" | "set" | "component" = "item",
+  coatingLabel = "",
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   const set = (key: string, raw: string, parse: (s: string) => unknown = (s) => s) => {
@@ -246,7 +265,7 @@ function formToBody(
   set("productFamily", f.productFamily);
   // A blank Description falls back to CBP's standard format rather than
   // staying empty, so the quotation never ships an unlabelled line.
-  set("description", f.description || defaultDescription(f, gradeLabel));
+  set("description", f.description || defaultDescription(f, gradeLabel, coatingLabel));
   set("gradeInput", f.gradeInput);
   set("threadCondition", f.threadCondition);
   set("sizeLabel", f.sizeLabel);
@@ -437,17 +456,18 @@ const CUSTOMER_ADD_NEW = "__add_new__";
     setError(null);
     try {
       const gradeLabel = gradeLabelFor(form.productFamily, form.gradeInput) ?? "";
+      const coatingLabel = lookups.coatingLabels[form.coatingCode] ?? form.coatingCode;
       const kind = panel.kind ?? "item";
       if (panel.mode === "add") {
         await apiPost(`/api/costings/${costing.costingId}/lines`, {
-          ...formToBody(form, "add", gradeLabel, kind),
+          ...formToBody(form, "add", gradeLabel, kind, coatingLabel),
           ...(kind === "component" ? { parentLineId: panel.parentLineId } : {}),
         });
       } else if (panel.mode === "edit" && panel.lineId) {
         const line = lines.find((l) => l.costingLineId === panel.lineId)!;
         await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
           expectedUpdatedAt: line.updatedAt,
-          ...formToBody(form, "edit", gradeLabel, kind),
+          ...formToBody(form, "edit", gradeLabel, kind, coatingLabel),
         });
       }
       setPanel({ mode: "closed" });
@@ -1238,14 +1258,6 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                 />
               </label>
               <label className="field" style={{ marginBottom: 12 }}>
-                <span className="field-label">Developed cut length (mm) — Anchor only</span>
-                <input
-                  type="number"
-                  value={form.developedCutLengthMm}
-                  onChange={(e) => setForm({ ...form, developedCutLengthMm: e.target.value })}
-                />
-              </label>
-              <label className="field" style={{ marginBottom: 12 }}>
                 <span className="field-label">Lead time</span>
                 {availableLeadTimes.length > 0 ? (
                   <select value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}>
@@ -1271,7 +1283,6 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                   value={form.diesOption}
                   onChange={(e) => setForm({ ...form, diesOption: e.target.value as LineForm["diesOption"] })}
                 >
-                  <option value="">n/a</option>
                   <option value="yes">Ya</option>
                   <option value="no_lookup">Tidak</option>
                   <option value="manual">Lainnya...</option>
