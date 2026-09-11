@@ -220,3 +220,98 @@ describe("AT-CUST-002: a customer's markup applies to every line item quoted for
     expect(Number(setSnap.rows[0].unit_selling_price)).toBe(Number(boltSnap.rows[0].unit_selling_price));
   });
 });
+
+describe("AT-CUST-003: bulk import upserts a customer masterlist by name, Super Admin only", () => {
+  it("a plain costing_user cannot bulk import", async () => {
+    await createUser({ username: "bulk_001", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("bulk_001", PASSWORD);
+    const res = await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: { rows: [{ customerName: "PT Bulk Guard" }] },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("creates new customers and reports created/updated/error per row", async () => {
+    await createUser({ username: "bulk_002_admin", password: PASSWORD, roles: ["super_admin"] });
+    const { cookie } = await login("bulk_002_admin", PASSWORD);
+    const nameA = `PT Bulk A ${Date.now()}`;
+    const nameB = `PT Bulk B ${Date.now()}`;
+
+    const res = await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: {
+        rows: [
+          { customerName: nameA, segment: "Distributor", markupPercent: 0.05 },
+          { customerName: nameB, customerCode: "BLK-B" },
+          { customerName: "" },
+        ],
+      },
+    });
+    expect(res.status).toBe(400); // an empty name fails the schema for the whole request, same as any other malformed row
+
+    const goodRes = await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: {
+        rows: [
+          { customerName: nameA, segment: "Distributor", markupPercent: 0.05 },
+          { customerName: nameB, customerCode: "BLK-B" },
+        ],
+      },
+    });
+    expect(goodRes.status).toBe(200);
+    expect(goodRes.json.summary).toEqual({ created: 2, updated: 0, errors: 0 });
+    expect((goodRes.json.results as { outcome: string }[]).map((r) => r.outcome)).toEqual(["created", "created"]);
+
+    const list = await apiFetch("/api/customers", { cookie });
+    const created = (list.json.customers as { customerName: string; segment: string | null; markupPercent: number | null }[]).find(
+      (c) => c.customerName === nameA,
+    );
+    expect(created?.segment).toBe("Distributor");
+    expect(created?.markupPercent).toBe(0.05);
+  });
+
+  it("re-importing the same name updates it, and a blank field in the row never clobbers an existing value", async () => {
+    await createUser({ username: "bulk_003_admin", password: PASSWORD, roles: ["super_admin"] });
+    const { cookie } = await login("bulk_003_admin", PASSWORD);
+    const name = `PT Bulk Merge ${Date.now()}`;
+
+    await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: { rows: [{ customerName: name, segment: "Fabricator", markupPercent: 0.02, paymentTerms: "NET 30" }] },
+    });
+
+    // Second pass only changes markupPercent; segment and paymentTerms are
+    // omitted from this row and must survive untouched.
+    const res = await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: { rows: [{ customerName: name, markupPercent: 0.03 }] },
+    });
+    expect(res.status).toBe(200);
+    expect((res.json.results as { outcome: string }[])[0].outcome).toBe("updated");
+
+    const list = await apiFetch("/api/customers", { cookie });
+    const row = (
+      list.json.customers as { customerName: string; segment: string | null; markupPercent: number | null; paymentTerms: string | null }[]
+    ).find((c) => c.customerName === name);
+    expect(row?.markupPercent).toBe(0.03);
+    expect(row?.segment).toBe("Fabricator");
+    expect(row?.paymentTerms).toBe("NET 30");
+  });
+
+  it("rejects an unknown segment value for the whole request (schema-level, not a per-row skip)", async () => {
+    await createUser({ username: "bulk_004_admin", password: PASSWORD, roles: ["super_admin"] });
+    const { cookie } = await login("bulk_004_admin", PASSWORD);
+    const res = await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: { rows: [{ customerName: "PT Bulk Bad Segment", segment: "Reseller" }] },
+    });
+    expect(res.status).toBe(400);
+  });
+});

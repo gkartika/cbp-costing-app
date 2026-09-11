@@ -124,6 +124,129 @@ const EDITABLE_FIELDS: Record<string, string> = {
   paymentTerms: "payment_terms",
 };
 
+export type BulkImportRow = {
+  customerName: string;
+  customerCode?: string | null;
+  segment?: CustomerSegment | null;
+  /** Fraction like the rest of the calc engine (0.05 = +5%), not a whole percent. */
+  markupPercent?: number | null;
+  paymentTerms?: string | null;
+};
+
+export type BulkImportOutcome = {
+  row: number;
+  customerName: string;
+  outcome: "created" | "updated" | "error";
+  message?: string;
+};
+
+/**
+ * Loads a customer masterlist in one pass, upserting by exact name — a new
+ * name creates a row, an existing active name is updated with whatever
+ * fields this row supplies. A blank field in the row leaves the existing
+ * value alone rather than clobbering it with null, so the same file can be
+ * re-run later (e.g. to add newly-onboarded customers) without disturbing
+ * ones already classified by hand. Super Admin only (policy.assertCanEditCustomer),
+ * same as single-record editing, since a row can carry segment/markup/terms.
+ */
+export async function bulkImportCustomers(
+  rows: BulkImportRow[],
+  actor: { actorUserId: string; actorRole: string; requestId: string },
+): Promise<BulkImportOutcome[]> {
+  const results: BulkImportOutcome[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNo = i + 1;
+    const name = row.customerName?.trim();
+    if (!name) {
+      results.push({ row: rowNo, customerName: row.customerName ?? "", outcome: "error", message: "Nama customer wajib diisi." });
+      continue;
+    }
+
+    try {
+      const outcome = await withTransaction(async (client) => {
+        const existing = await client.query<CustomerRow>(
+          `SELECT * FROM customers WHERE customer_name = $1 AND active = TRUE FOR UPDATE`,
+          [name],
+        );
+
+        if (existing.rows.length > 0) {
+          const before = existing.rows[0];
+          const setClauses: string[] = [];
+          const values: unknown[] = [];
+          const changed: string[] = [];
+          const maybeSet = (column: string, key: string, value: unknown) => {
+            if (value === undefined || value === null || value === "") return;
+            changed.push(key);
+            values.push(value);
+            setClauses.push(`${column} = $${values.length}`);
+          };
+          maybeSet("customer_code", "customerCode", row.customerCode?.trim());
+          maybeSet("segment", "segment", row.segment);
+          maybeSet("markup_percent", "markupPercent", row.markupPercent);
+          maybeSet("payment_terms", "paymentTerms", row.paymentTerms?.trim());
+          if (setClauses.length === 0) return "updated" as const;
+
+          values.push(before.customer_id);
+          await client.query(
+            `UPDATE customers SET ${setClauses.join(", ")}, updated_at = now() WHERE customer_id = $${values.length}`,
+            values,
+          );
+          await writeAuditEvent(
+            {
+              action: "CUSTOMER_UPDATED",
+              entityType: "customers",
+              entityId: before.customer_id,
+              actorUserId: actor.actorUserId,
+              actorRole: actor.actorRole,
+              requestId: actor.requestId,
+              changedFields: changed,
+              afterJson: { ...row, bulkImport: true },
+            },
+            client,
+          );
+          return "updated" as const;
+        }
+
+        const customerId = generateId("cust");
+        await client.query(
+          `INSERT INTO customers (customer_id, customer_name, customer_code, segment, markup_percent, payment_terms, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            customerId,
+            name,
+            row.customerCode?.trim() || null,
+            row.segment || null,
+            row.markupPercent ?? null,
+            row.paymentTerms?.trim() || null,
+            actor.actorUserId,
+          ],
+        );
+        await writeAuditEvent(
+          {
+            action: "CUSTOMER_CREATED",
+            entityType: "customers",
+            entityId: customerId,
+            actorUserId: actor.actorUserId,
+            actorRole: actor.actorRole,
+            requestId: actor.requestId,
+            afterJson: { ...row, customerName: name, bulkImport: true },
+          },
+          client,
+        );
+        return "created" as const;
+      });
+
+      results.push({ row: rowNo, customerName: name, outcome });
+    } catch (e) {
+      results.push({ row: rowNo, customerName: name, outcome: "error", message: e instanceof Error ? e.message : "Gagal menyimpan." });
+    }
+  }
+
+  return results;
+}
+
 /** Super Admin only (policy.assertCanEditCustomer) — every field on an existing customer record. */
 export async function updateCustomer(
   customerId: string,

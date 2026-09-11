@@ -22,6 +22,67 @@ type EditForm = {
   paymentTerms: string;
 };
 
+type ImportOutcome = { row: number; customerName: string; outcome: "created" | "updated" | "error"; message?: string };
+
+const CSV_COLUMNS = ["customerName", "customerCode", "segment", "markupPercent", "paymentTerms"] as const;
+
+/** Minimal RFC4180 parser: quoted fields, embedded commas, "" as an escaped quote. Good enough for a pasted customer masterlist without pulling in a CSV library. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+}
+
+/** Header-aware: matches columns by name (case-insensitive), so column order in the pasted file doesn't matter. */
+function csvToRows(text: string): Record<string, string>[] {
+  const table = parseCsv(text);
+  if (table.length === 0) return [];
+  const header = table[0].map((h) => h.trim().toLowerCase());
+  return table.slice(1).map((cells) => {
+    const record: Record<string, string> = {};
+    CSV_COLUMNS.forEach((col) => {
+      const idx = header.indexOf(col.toLowerCase());
+      record[col] = idx >= 0 ? (cells[idx] ?? "").trim() : "";
+    });
+    return record;
+  });
+}
+
 function toEditForm(c: Customer): EditForm {
   return {
     customerName: c.customerName,
@@ -49,6 +110,10 @@ export function CustomersAdmin({
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<EditForm | null>(null);
+  const [importText, setImportText] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResults, setImportResults] = useState<ImportOutcome[] | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   async function refresh() {
     const res = await fetch("/api/customers");
@@ -114,6 +179,69 @@ export function CustomersAdmin({
     }
   }
 
+  async function handleBulkImport() {
+    setImportBusy(true);
+    setImportError(null);
+    setImportResults(null);
+    try {
+      const parsed = csvToRows(importText);
+      if (parsed.length === 0) throw new Error("Tidak ada baris data untuk diimpor.");
+
+      const clientErrors: ImportOutcome[] = [];
+      const validRows: { rowNo: number; customerName: string; customerCode?: string; segment?: string; markupPercent?: number; paymentTerms?: string }[] = [];
+
+      parsed.forEach((r, idx) => {
+        const rowNo = idx + 1;
+        const customerName = r.customerName.trim();
+        if (!customerName) {
+          clientErrors.push({ row: rowNo, customerName: "", outcome: "error", message: "Nama customer wajib diisi." });
+          return;
+        }
+        if (r.segment && !SEGMENTS.includes(r.segment as (typeof SEGMENTS)[number])) {
+          clientErrors.push({ row: rowNo, customerName, outcome: "error", message: `Segmen tidak dikenal: "${r.segment}".` });
+          return;
+        }
+        let markupPercent: number | undefined;
+        if (r.markupPercent) {
+          const raw = Number(r.markupPercent);
+          if (Number.isNaN(raw) || raw <= -100) {
+            clientErrors.push({ row: rowNo, customerName, outcome: "error", message: "Kenaikan harga tidak valid." });
+            return;
+          }
+          markupPercent = raw / 100;
+        }
+        validRows.push({
+          rowNo,
+          customerName,
+          customerCode: r.customerCode || undefined,
+          segment: r.segment || undefined,
+          markupPercent,
+          paymentTerms: r.paymentTerms || undefined,
+        });
+      });
+
+      let serverResults: ImportOutcome[] = [];
+      if (validRows.length > 0) {
+        const res = await fetch("/api/customers/bulk-import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: validRows.map(({ rowNo: _rowNo, ...row }) => row) }),
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error?.message ?? "Gagal mengimpor customer.");
+        serverResults = (body.results as ImportOutcome[]).map((r, i) => ({ ...r, row: validRows[i].rowNo }));
+      }
+
+      setImportResults([...clientErrors, ...serverResults].sort((a, b) => a.row - b.row));
+      await refresh();
+      router.refresh();
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Gagal mengimpor customer.");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <div style={{ marginBottom: 16 }}>
@@ -159,6 +287,69 @@ export function CustomersAdmin({
           </p>
         )}
       </div>
+
+      {isSuperAdmin && (
+        <div className="card">
+          <h2>Bulk Import Customer</h2>
+          <p className="hint" style={{ marginTop: 0 }}>
+            Tempel data CSV dengan header <code>customerName,customerCode,segment,markupPercent,paymentTerms</code>.
+            Hanya <code>customerName</code> yang wajib; kolom lain boleh kosong. <code>segment</code> harus salah satu
+            dari {SEGMENTS.join(", ")}. <code>markupPercent</code> ditulis sebagai persen biasa (mis. 5 untuk +5%,
+            bukan 0.05). Nama yang sudah ada akan diperbarui memakai kolom yang diisi — kolom kosong tidak menimpa
+            nilai yang sudah tersimpan.
+          </p>
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            rows={6}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: 13 }}
+            placeholder={"customerName,customerCode,segment,markupPercent,paymentTerms\nPT Contoh Sejahtera,CS-001,Distributor,5,NET 30"}
+          />
+          <div style={{ marginTop: 8 }}>
+            <button onClick={handleBulkImport} disabled={importBusy || !importText.trim()} className="btn">
+              {importBusy ? "Mengimpor…" : "Import"}
+            </button>
+          </div>
+          {importError && (
+            <p className="error-note" role="alert">
+              {importError}
+            </p>
+          )}
+          {importResults && (
+            <div style={{ marginTop: 12 }}>
+              <p style={{ margin: "0 0 8px" }}>
+                Selesai: {importResults.filter((r) => r.outcome === "created").length} baru,{" "}
+                {importResults.filter((r) => r.outcome === "updated").length} diperbarui,{" "}
+                {importResults.filter((r) => r.outcome === "error").length} gagal.
+              </p>
+              {importResults.some((r) => r.outcome === "error") && (
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Baris</th>
+                        <th scope="col">Nama</th>
+                        <th scope="col">Masalah</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importResults
+                        .filter((r) => r.outcome === "error")
+                        .map((r) => (
+                          <tr key={r.row}>
+                            <td className="mono">{r.row}</td>
+                            <td>{r.customerName || "—"}</td>
+                            <td>{r.message}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card">
         <h2>Semua Customer</h2>
