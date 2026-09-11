@@ -185,6 +185,19 @@ revert that breaks something else is caught before it lands.
   (business-confirmed). If "Zinc" pricing ever looks flat/uniform regardless
   of size again, that's expected — it's the one coating without tiers, unlike
   HDG and PTFE.
+- **Coating on an item smaller than the smallest diameter tier now falls back
+  to that smallest tier's rate, instead of refusing.** Auditing HDG/PTFE
+  after the Zinc fix turned up real gaps: HDG's tiers start at 8mm and PTFE's
+  at 10mm, so a 1/4" (6.35mm) or 5/16" (7.9375mm) Bolt/Nut/Washer with either
+  coating threw `COATING_GUIDE_NOT_FOUND`. Business-confirmed 2026-09-12:
+  same "never smaller, never a different scope" rule `resolvePricePerKg`
+  already applies to price gaps, now generalized in `resolveCoatingRule` to
+  every coating (HDG, PTFE, Zinc, and any future one) — no master-data
+  change needed, since it's the resolution logic that was too strict, not
+  the rate card. Explain shows a substitution note whenever this fires; a
+  coating that has genuinely no scope for a product type at all (e.g. HDG
+  has no "Anchor" item_scope) still throws — that's a real gap, not a size
+  issue, and is unaffected by this change.
 - **Set components price on the produced quantity, not the set count**
   (DEC-017). A set of 300 with 2 nuts each prices those nuts as 600 pieces, so
   a component can land in a quantity band the set count alone would not reach,

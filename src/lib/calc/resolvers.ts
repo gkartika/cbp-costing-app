@@ -257,16 +257,33 @@ export function resolveCoatingRule(
   ctx: GuideContext,
   params: { processName: string; productFamily: string; diameterMm: number },
 ): { rule: (typeof ctx.coatingPriceGuides)[number]; ref: ResolvedRuleRef } {
-  const candidates = ctx.coatingPriceGuides.filter((r) => {
+  const scoped = ctx.coatingPriceGuides.filter((r) => {
     if (r.processName !== params.processName) return false;
-    if (r.minDiameterMm !== null && params.diameterMm < r.minDiameterMm) return false;
     if (!r.itemScope) return true;
     const scope = r.itemScope.toLowerCase();
     return scope.includes("all") || scope.includes(params.productFamily.toLowerCase());
   });
-  if (candidates.length === 0) throw Errors.coatingGuideNotFound();
-  const best = candidates.reduce((a, b) => ((b.minDiameterMm ?? -Infinity) > (a.minDiameterMm ?? -Infinity) ? b : a));
-  return { rule: best, ref: { table: "coating_price_guides", id: best.coatingRuleId } };
+  if (scoped.length === 0) throw Errors.coatingGuideNotFound();
+
+  const fitting = scoped.filter((r) => r.minDiameterMm === null || params.diameterMm >= r.minDiameterMm);
+  if (fitting.length > 0) {
+    const best = fitting.reduce((a, b) => ((b.minDiameterMm ?? -Infinity) > (a.minDiameterMm ?? -Infinity) ? b : a));
+    return { rule: best, ref: { table: "coating_price_guides", id: best.coatingRuleId } };
+  }
+
+  // Smaller than every tiered size (e.g. a 1/4" bolt under HDG's 8mm floor) —
+  // CBP confirmed 2026-09-12: use the next tier up rather than refuse, the
+  // same "never smaller, never a different scope" fallback resolvePricePerKg
+  // already applies to price_per_kg gaps, now generalized to every coating.
+  const smallest = scoped.reduce((a, b) => ((b.minDiameterMm ?? Infinity) < (a.minDiameterMm ?? Infinity) ? b : a));
+  return {
+    rule: smallest,
+    ref: {
+      table: "coating_price_guides",
+      id: smallest.coatingRuleId,
+      note: `Tidak ada tarif ${params.processName} untuk diameter ${params.diameterMm}mm; menggunakan tarif ukuran lebih besar berikutnya (mulai ${smallest.minDiameterMm}mm).`,
+    },
+  };
 }
 
 /** Resolves the fixed-pricelist trading item for a product category + size (SCP-002). */

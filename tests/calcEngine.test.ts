@@ -12,6 +12,7 @@ import {
   resolveRawBarDiameter,
   resolveDiesCost,
   resolveMinimumPrice,
+  resolveCoatingRule,
 } from "../src/lib/calc/resolvers";
 import { ceilingToIncrement } from "../src/lib/calc/rounding";
 import { computeCoatingPrice } from "../src/lib/calc/coating";
@@ -1049,6 +1050,77 @@ describe("AT-COATING-001: coating price = costing weight x rate, before order-we
       lengthMm: null,
     });
     expect(result.coatingPricePerItem).toBe(20000);
+  });
+});
+
+describe("AT-COATING-003: a diameter smaller than every tier falls back to the next size up, same rule as price_per_kg", () => {
+  const tieredCoatingCtx: GuideContext = {
+    guideVersionId: "ctx-coating-003",
+    config: new Map(),
+    materials: [],
+    rawBarStock: [],
+    diesCostGuides: [],
+    materialGradeMap: [],
+    gradeProfileRules: [],
+    gradePriceAliases: [],
+    materialSizeGuides: [],
+    pricePerKg: [],
+    coatingPriceGuides: [
+      { coatingRuleId: "coat-10", processName: "HDGTEST", displayLabel: null, itemScope: "Bolt / Nut / Washer", minDiameterMm: 10, basis: "IDR_per_kg", rate: 20000 },
+      { coatingRuleId: "coat-20", processName: "HDGTEST", displayLabel: null, itemScope: "Bolt / Nut / Washer", minDiameterMm: 20, basis: "IDR_per_kg", rate: 15000 },
+    ],
+    minimumPrices: [],
+    adjustmentRules: [],
+    tradingItems: [],
+    tradingPriceTiers: [],
+    calculationFormulas: [],
+    costingRouteRules: [],
+  };
+
+  it("below the smallest tier (5mm < 10mm floor): uses the 10mm tier's rate, with an Explain note", () => {
+    const { rule, ref } = resolveCoatingRule(tieredCoatingCtx, { processName: "HDGTEST", productFamily: "Bolt", diameterMm: 5 });
+    expect(rule.rate).toBe(20000);
+    expect(ref.note).toBeDefined();
+    expect(ref.note).toContain("10mm");
+  });
+
+  it("exactly on a tier boundary (10mm): resolves that tier directly, no fallback note", () => {
+    const { rule, ref } = resolveCoatingRule(tieredCoatingCtx, { processName: "HDGTEST", productFamily: "Bolt", diameterMm: 10 });
+    expect(rule.rate).toBe(20000);
+    expect(ref.note).toBeUndefined();
+  });
+
+  it("above every tier (25mm): resolves the highest applicable tier normally, no fallback note", () => {
+    const { rule, ref } = resolveCoatingRule(tieredCoatingCtx, { processName: "HDGTEST", productFamily: "Nut", diameterMm: 25 });
+    expect(rule.rate).toBe(15000);
+    expect(ref.note).toBeUndefined();
+  });
+
+  it("end-to-end via computeCoatingPrice: a too-small item still prices, using the fallback rate", () => {
+    const result = computeCoatingPrice(tieredCoatingCtx, {
+      coatingCode: "HDGTEST",
+      productTypeLabel: "Washer",
+      diameterMm: 6.35,
+      costingWeightPerItemKg: 1,
+      qty: 1,
+      lengthMm: null,
+    });
+    expect(result.coatingPricePerItem).toBe(20000);
+    expect(result.refs.some((r) => r.note?.includes("HDGTEST"))).toBe(true);
+  });
+
+  it("a flat, untiered rate (minDiameterMm null) never needs the fallback, regardless of how small the item is", () => {
+    const flatCtx: GuideContext = { ...tieredCoatingCtx, coatingPriceGuides: [
+      { coatingRuleId: "coat-flat", processName: "ZINCTEST", displayLabel: null, itemScope: "All Item", minDiameterMm: null, basis: "IDR_per_kg", rate: 5000 },
+    ] };
+    const { ref } = resolveCoatingRule(flatCtx, { processName: "ZINCTEST", productFamily: "Bolt", diameterMm: 1 });
+    expect(ref.note).toBeUndefined();
+  });
+
+  it("no item_scope covers this family at all: still a real error, not silently falling back", () => {
+    expect(() => resolveCoatingRule(tieredCoatingCtx, { processName: "HDGTEST", productFamily: "Anchor", diameterMm: 5 })).toThrow(
+      AppError,
+    );
   });
 });
 
