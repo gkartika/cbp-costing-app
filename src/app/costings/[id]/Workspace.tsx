@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPost, apiPatch, apiDelete, type ApiError } from "./clientApi";
 import { buildLineTree, defaultSetDescription } from "@/lib/costings/sets";
+import { DEFAULT_PAYMENT_TERMS } from "@/lib/costings/paymentTerms";
 import { StatusPill } from "@/components/Pills";
 import { Modal } from "@/components/Modal";
 import { Ticket, TicketLine, TicketDivider, TicketTotal } from "@/components/Ticket";
@@ -152,7 +153,10 @@ const EMPTY_FORM: LineForm = {
   lengthMm: "",
   developedCutLengthMm: "",
   qty: "1",
-  leadTimeDays: "",
+  // CBP's default lead time is 4 minggu (business-confirmed 2026-09-12) — the
+  // day menu (7/10/14/21/28/35/42) is identical across every family's tiers,
+  // only the surcharge differs, so 28 is always a valid option once one loads.
+  leadTimeDays: "28",
   coatingCode: "",
   diesOption: "yes",
   diesTotalCost: "",
@@ -1150,7 +1154,16 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               </label>
               <label className="field" style={{ marginBottom: 12 }}>
                 <span className="field-label">Qty (jumlah set)</span>
-                <input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
+                <input
+                  type="number"
+                  min="1"
+                  value={form.qty}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v !== "" && Number(v) < 1) return;
+                    setForm({ ...form, qty: v });
+                  }}
+                />
               </label>
             </>
           )}
@@ -1369,9 +1382,13 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               <span className="field-label">Qty per set</span>
               <input
                 type="number"
-                min={1}
+                min="1"
                 value={form.qtyPerSet}
-                onChange={(e) => setForm({ ...form, qtyPerSet: e.target.value })}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v !== "" && Number(v) < 1) return;
+                  setForm({ ...form, qtyPerSet: v });
+                }}
               />
               <span className="hint">
                 Berapa buah komponen ini dalam satu set. Jumlah yang diproduksi = angka ini x jumlah set, dan itulah
@@ -1381,7 +1398,16 @@ const CUSTOMER_ADD_NEW = "__add_new__";
           ) : (
             <label className="field" style={{ marginBottom: 12 }}>
               <span className="field-label">Qty</span>
-              <input type="number" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} />
+              <input
+                type="number"
+                min="1"
+                value={form.qty}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v !== "" && Number(v) < 1) return;
+                  setForm({ ...form, qty: v });
+                }}
+              />
             </label>
           )}
 
@@ -1556,7 +1582,10 @@ function PaymentTermsField({
   const [busy, setBusy] = useState(false);
 
   const accountTerms = costing.accountPaymentTerms;
-  const effective = costing.paymentTermsOverride ?? accountTerms;
+  // No override and no account default: fall back to CBP's standard terms
+  // rather than showing nothing (business-confirmed 2026-09-12).
+  const isDefault = !costing.paymentTermsOverride && !accountTerms;
+  const effective = costing.paymentTermsOverride ?? accountTerms ?? DEFAULT_PAYMENT_TERMS;
 
   async function save() {
     setBusy(true);
@@ -1578,7 +1607,7 @@ function PaymentTermsField({
         <input
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={accountTerms ?? "mis. 30 hari setelah invoice"}
+          placeholder={accountTerms ?? DEFAULT_PAYMENT_TERMS}
           aria-label="Termin pembayaran khusus quotation ini"
           style={{ minWidth: 240 }}
         />
@@ -1594,7 +1623,7 @@ function PaymentTermsField({
 
   return (
     <p style={{ fontSize: 12 }}>
-      Termin: {effective ?? <em style={{ color: "var(--ink-soft)" }}>belum diatur</em>}
+      Termin: {isDefault ? <em style={{ color: "var(--ink-soft)" }}>{effective}</em> : effective}
       {costing.paymentTermsOverride && (
         <span className="pill neutral" style={{ marginLeft: 6, fontSize: 10 }}>
           khusus quotation ini

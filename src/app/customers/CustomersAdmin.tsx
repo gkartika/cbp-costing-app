@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
+import { DEFAULT_PAYMENT_TERMS } from "@/lib/costings/paymentTerms";
 
 const SEGMENTS = ["Distributor", "Fabricator", "Subcontractor", "End User"] as const;
 
@@ -440,7 +441,13 @@ export function CustomersAdmin({
                     <td className="mono">{c.customerCode ?? "—"}</td>
                     <td>{c.segment ? <span className="pill neutral">{c.segment}</span> : "—"}</td>
                     <td className="mono">{c.markupPercent !== null ? `+${(c.markupPercent * 100).toFixed(1)}%` : "—"}</td>
-                    <td>{c.paymentTerms ?? "—"}</td>
+                    <td>
+                      {c.paymentTerms ?? (
+                        <em style={{ color: "var(--ink-soft)" }} title="Default — belum diatur khusus">
+                          {DEFAULT_PAYMENT_TERMS}
+                        </em>
+                      )}
+                    </td>
                     {isSuperAdmin && (
                       <td>
                         <button onClick={() => openEdit(c)} className="btn secondary small">

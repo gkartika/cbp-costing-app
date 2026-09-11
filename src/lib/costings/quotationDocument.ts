@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db";
 import type { CostingHeaderRow } from "./types";
+import { DEFAULT_PAYMENT_TERMS } from "./paymentTerms";
 
 export type QuotationComponent = {
   description: string | null;
@@ -29,7 +30,8 @@ export type QuotationDocument = {
   /** CBP's standard terms, in published order (DEC-016). */
   terms: string[];
   /** Negotiated per account; the costing's own override wins when set. */
-  paymentTerms: string | null;
+  /** Never actually null — falls back to DEFAULT_PAYMENT_TERMS when nothing more specific is set. */
+  paymentTerms: string;
   /** Who signs the letter: the costing's own signatory when set, else the owner. */
   preparedBy: string | null;
   preparedByTitle: string | null;
@@ -152,7 +154,7 @@ export async function buildQuotationDocument(header: CostingHeaderRow): Promise<
     lines,
     totalExPpn: lines.reduce((sum, l) => sum + l.orderTotal, 0),
     terms: termRows.map((t) => t.term_text),
-    paymentTerms: header.payment_terms_override ?? paymentRows[0]?.payment_terms ?? null,
+    paymentTerms: header.payment_terms_override ?? paymentRows[0]?.payment_terms ?? DEFAULT_PAYMENT_TERMS,
     preparedBy: header.signed_by_name ?? ownerRows[0]?.display_name ?? null,
     preparedByTitle: header.signed_by_title ?? null,
   };
