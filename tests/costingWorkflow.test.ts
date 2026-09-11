@@ -608,6 +608,10 @@ describe("Customer is optional at Draft creation but required before Finalize", 
     });
     expect(withCustomer.status).toBe(200);
     expect(withCustomer.json.customerName).toBe("PT Late Customer");
+    // Setting the customer after creation must link the real customer_id, not
+    // just the display name -- anything keyed off customer_id (the per-
+    // customer markup chief among them) silently saw no customer otherwise.
+    expect(withCustomer.json.customerId).toBeTruthy();
 
     const finalized = await apiFetch(`/api/costings/${costingId}/finalize`, {
       method: "POST",

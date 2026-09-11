@@ -5,6 +5,7 @@ import { getRequestId, requireUser, primaryAuditRole } from "@/lib/http/requestC
 import { policy } from "@/lib/authz/policy";
 import { pool, withTransaction } from "@/lib/db";
 import { writeAuditEvent } from "@/lib/audit/writeAuditEvent";
+import { resolveOrCreateCustomer } from "@/lib/costings/customers";
 import { serializeCosting, type CostingHeaderRow } from "@/lib/costings/types";
 import { serializeCostingLine, type CostingLineRow } from "@/lib/costings/lines";
 import { AppError, Errors } from "@/lib/errors";
@@ -84,6 +85,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx) => {
 
 const PatchCostingSchema = z.object({
   expectedUpdatedAt: z.string(),
+  /** Selecting an existing customer from the picker — precise, no name-matching. */
+  customerId: z.string().optional(),
+  /** Either the free-text "new customer" path (resolved/created by exact name, same as costing creation), or a display-only rename when it matches customerId's own row. */
   customerName: z.string().min(1).max(200).optional(),
   validityDays: z.number().int().positive().optional(),
   /** Overrides the customer account default for this quotation only; null clears it. */
@@ -116,7 +120,6 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
     throw Errors.staleUpdate();
   }
 
-  const nextCustomerName = body.data.customerName ?? before.customer_name_snapshot;
   const nextValidityDays = body.data.validityDays ?? before.validity_days;
   const nextPaymentOverride =
     "paymentTermsOverride" in body.data ? (body.data.paymentTermsOverride?.trim() || null) : before.payment_terms_override;
@@ -124,25 +127,73 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
     "signedByName" in body.data ? (body.data.signedByName?.trim() || null) : before.signed_by_name;
   const nextSignedTitle =
     "signedByTitle" in body.data ? (body.data.signedByTitle?.trim() || null) : before.signed_by_title;
-  const changedFields: string[] = [];
-  if (nextCustomerName !== before.customer_name_snapshot) changedFields.push("customerName");
-  if (nextValidityDays !== before.validity_days) changedFields.push("validityDays");
-  if (nextPaymentOverride !== before.payment_terms_override) changedFields.push("paymentTermsOverride");
-  if (nextSignedName !== before.signed_by_name) changedFields.push("signedByName");
-  if (nextSignedTitle !== before.signed_by_title) changedFields.push("signedByTitle");
 
   const after = await withTransaction(async (client) => {
+    // Resolving to a real customer_id here (not just renaming the display
+    // snapshot) was missing entirely before -- the picker could select an
+    // existing customer, or type a new name, but this route only ever wrote
+    // customer_name_snapshot, so costing_headers.customer_id stayed whatever
+    // it was at creation (usually null, since "+ New Costing" starts blank).
+    // Everything that keys off customer_id -- the per-customer markup at
+    // calculate time chief among them -- silently saw no customer at all.
+    // Resolving here also self-heals any older costing the next time its
+    // customer is touched, the same as resolveOrCreateCustomer already does
+    // for new costings.
+    let nextCustomerId = before.customer_id;
+    let nextCustomerName = before.customer_name_snapshot;
+    let nextCustomerCode = before.customer_code_snapshot;
+    if (body.data.customerId) {
+      const { rows: custRows } = await client.query<{ customer_id: string; customer_name: string; customer_code: string | null }>(
+        `SELECT customer_id, customer_name, customer_code FROM customers WHERE customer_id = $1 AND active = TRUE`,
+        [body.data.customerId],
+      );
+      if (custRows.length === 0) throw Errors.notFound("Customer");
+      nextCustomerId = custRows[0].customer_id;
+      nextCustomerName = custRows[0].customer_name;
+      nextCustomerCode = custRows[0].customer_code;
+    } else if (body.data.customerName) {
+      const customer = await resolveOrCreateCustomer(client, {
+        customerName: body.data.customerName.trim(),
+        actorUserId: user.userId,
+        actorRole: primaryAuditRole(user),
+        requestId,
+      });
+      nextCustomerId = customer.customerId;
+      nextCustomerName = customer.customerName;
+      nextCustomerCode = customer.customerCode;
+    }
+
+    const changedFields: string[] = [];
+    if (nextCustomerId !== before.customer_id) changedFields.push("customerId");
+    if (nextCustomerName !== before.customer_name_snapshot) changedFields.push("customerName");
+    if (nextValidityDays !== before.validity_days) changedFields.push("validityDays");
+    if (nextPaymentOverride !== before.payment_terms_override) changedFields.push("paymentTermsOverride");
+    if (nextSignedName !== before.signed_by_name) changedFields.push("signedByName");
+    if (nextSignedTitle !== before.signed_by_title) changedFields.push("signedByTitle");
+
     const { rows, rowCount } = await client.query<CostingHeaderRow>(
       `UPDATE costing_headers
-         SET customer_name_snapshot = $1,
-             validity_days = $2,
-             payment_terms_override = $3,
-             signed_by_name = $4,
-             signed_by_title = $5,
+         SET customer_id = $1,
+             customer_name_snapshot = $2,
+             customer_code_snapshot = $3,
+             validity_days = $4,
+             payment_terms_override = $5,
+             signed_by_name = $6,
+             signed_by_title = $7,
              updated_at = now()
-       WHERE costing_id = $6 AND updated_at = $7
+       WHERE costing_id = $8 AND updated_at = $9
        RETURNING *`,
-      [nextCustomerName, nextValidityDays, nextPaymentOverride, nextSignedName, nextSignedTitle, id, before.updated_at],
+      [
+        nextCustomerId,
+        nextCustomerName,
+        nextCustomerCode,
+        nextValidityDays,
+        nextPaymentOverride,
+        nextSignedName,
+        nextSignedTitle,
+        id,
+        before.updated_at,
+      ],
     );
     if (rowCount === 0) {
       // Lost the race between our read and this write — another update committed first.
@@ -158,8 +209,8 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
           actorUserId: user.userId,
           actorRole: primaryAuditRole(user),
           requestId,
-          beforeJson: { customerName: before.customer_name_snapshot, validityDays: before.validity_days },
-          afterJson: { customerName: nextCustomerName, validityDays: nextValidityDays },
+          beforeJson: { customerId: before.customer_id, customerName: before.customer_name_snapshot, validityDays: before.validity_days },
+          afterJson: { customerId: nextCustomerId, customerName: nextCustomerName, validityDays: nextValidityDays },
           changedFields,
         },
         client,

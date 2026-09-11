@@ -178,6 +178,54 @@ describe("AT-CUST-002: a customer's markup applies to every line item quoted for
     expect(customerRef).toBeUndefined();
   });
 
+  it("setting the customer AFTER creation (the normal '+ New Costing' then pick-a-customer flow) still applies their markup", async () => {
+    // Regression test: PATCH /api/costings/:id used to write only
+    // customer_name_snapshot, never customer_id, so a costing created blank
+    // and given a customer afterward (the dashboard's actual flow -- "+ New
+    // Costing" never asks for one up front) silently priced with no markup
+    // at all, no matter what the selected customer's rate was.
+    await createUser({ username: "markup_004", password: PASSWORD, roles: ["costing_user"] });
+    const { cookie } = await login("markup_004", PASSWORD);
+    const admin = await login("markup_admin", PASSWORD);
+
+    const cust = await apiFetch("/api/customers", {
+      method: "POST",
+      cookie,
+      body: { customerName: `PT Late Markup ${Date.now()}` },
+    });
+    await apiFetch(`/api/customers/${cust.json.customerId}`, {
+      method: "PATCH",
+      cookie: admin.cookie,
+      body: { markupPercent: 0.1 },
+    });
+
+    const created = await apiFetch("/api/costings", { method: "POST", cookie, body: {} });
+    expect(created.json.customerId).toBeNull();
+
+    const withCustomer = await apiFetch(`/api/costings/${created.json.costingId}`, {
+      method: "PATCH",
+      cookie,
+      body: { expectedUpdatedAt: created.json.updatedAt, customerId: cust.json.customerId },
+    });
+    expect(withCustomer.status).toBe(200);
+    expect(withCustomer.json.customerId).toBe(cust.json.customerId);
+
+    const line = await apiFetch(`/api/costings/${created.json.costingId}/lines`, {
+      method: "POST",
+      cookie,
+      body: { route: "CUSTOM", productFamily: "Nut", gradeInput: "2H", sizeLabel: "M20", diameterMm: 20, qty: 400 },
+    });
+    await apiFetch(`/api/costings/${created.json.costingId}/calculate`, { method: "POST", cookie });
+
+    const explain = await apiFetch(`/api/costings/${created.json.costingId}/lines/${line.json.costingLineId}/explanation`, {
+      cookie,
+    });
+    const customerRef = (explain.json.explainedRules as { table: string; note?: string }[]).find(
+      (r) => r.table === "customers",
+    );
+    expect(customerRef?.note).toMatch(/10/);
+  });
+
   it("a set's total already reflects the customer markup transitively — not applied a second time on the set", async () => {
     await createUser({ username: "markup_003", password: PASSWORD, roles: ["costing_user"] });
     const { cookie } = await login("markup_003", PASSWORD);

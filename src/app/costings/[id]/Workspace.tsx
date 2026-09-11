@@ -11,6 +11,7 @@ import { Ticket, TicketLine, TicketDivider, TicketTotal } from "@/components/Tic
 type Costing = {
   costingId: string;
   quotationNo: string | null;
+  customerId: string | null;
   customerName: string;
   ownerUserId: string;
   status: string;
@@ -385,25 +386,33 @@ export function Workspace(props: {
 const CUSTOMER_ADD_NEW = "__add_new__";
 
   function openCustomerEditor() {
-    const existing = customers.find((c) => c.customerName === costing.customerName);
-    setCustomerSelected(existing?.customerId ?? "");
+    setCustomerSelected(costing.customerId ?? "");
     setCustomerNewName("");
     setEditingCustomer(true);
   }
 
   async function saveCustomer() {
-    const customerName =
-      customerSelected === CUSTOMER_ADD_NEW
-        ? customerNewName.trim()
-        : (customers.find((c) => c.customerId === customerSelected)?.customerName ?? "");
-    if (!customerName) {
+    const isNew = customerSelected === CUSTOMER_ADD_NEW;
+    const customerName = isNew ? customerNewName.trim() : "";
+    if (isNew && !customerName) {
+      setError("Masukkan nama customer baru.");
+      return;
+    }
+    if (!isNew && !customerSelected) {
       setError("Pilih atau masukkan nama customer.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await apiPatch(`/api/costings/${costing.costingId}`, { expectedUpdatedAt: costing.updatedAt, customerName });
+      // Selecting an existing customer sends its id directly -- precise, no
+      // name-matching. Only the "+ Customer baru..." path sends a bare name,
+      // which the server resolves-or-creates by exact match (same as costing
+      // creation), so this is the one place a brand-new customer can appear.
+      await apiPatch(`/api/costings/${costing.costingId}`, {
+        expectedUpdatedAt: costing.updatedAt,
+        ...(isNew ? { customerName } : { customerId: customerSelected }),
+      });
       setEditingCustomer(false);
       await refreshCosting();
     } catch (e) {
@@ -1253,8 +1262,13 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                 <span className="field-label">Length (mm) — finished length (Bolt/Stud)</span>
                 <input
                   type="number"
+                  min="0"
                   value={form.lengthMm}
-                  onChange={(e) => setForm({ ...form, lengthMm: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v !== "" && Number(v) < 0) return;
+                    setForm({ ...form, lengthMm: v });
+                  }}
                 />
               </label>
               <label className="field" style={{ marginBottom: 12 }}>
