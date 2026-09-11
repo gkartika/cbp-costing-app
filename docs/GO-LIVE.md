@@ -198,6 +198,20 @@ revert that breaks something else is caught before it lands.
   coating that has genuinely no scope for a product type at all (e.g. HDG
   has no "Anchor" item_scope) still throws — that's a real gap, not a size
   issue, and is unaffected by this change.
+- **Customer markup now actually applies — it never did before 2026-09-12.**
+  Setting a costing's customer after creation (the normal flow: "+ New
+  Costing" never asks for one up front) only ever wrote
+  `customer_name_snapshot`; `customer_id` stayed null, so the per-customer
+  markup at calculate time silently saw no customer at all, regardless of
+  the customer's actual rate. Fixed in `PATCH /api/costings/:id` — a
+  `customerId` (the picker) or `customerName` (the "+ Customer baru..."
+  path) now both resolve a real `customer_id`, self-healing a costing the
+  next time its customer is touched. The 7 pre-existing costings this had
+  already affected were backfilled via `npm run backfill:costing-customer-ids`
+  (a pure metadata link — it recalculates nothing and does not change any
+  already-recorded price, safe to run again if more turn up). If a
+  customer's markup still doesn't seem to be applying, check Explain for a
+  `customers` ref before assuming the rate itself is wrong.
 - **Set components price on the produced quantity, not the set count**
   (DEC-017). A set of 300 with 2 nuts each prices those nuts as 600 pieces, so
   a component can land in a quantity band the set count alone would not reach,

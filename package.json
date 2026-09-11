@@ -23,6 +23,7 @@
     "fill:price-gaps": "dotenv -e .env.local -- tsx scripts/fill-price-gaps.ts",
     "fill:washer-dimensions": "dotenv -e .env.local -- tsx scripts/fill-washer-dimensions.ts",
     "fix:zinc-coating": "dotenv -e .env.local -- tsx scripts/fix-zinc-coating.ts",
+    "backfill:costing-customer-ids": "dotenv -e .env.local -- tsx scripts/backfill-costing-customer-ids.ts",
     "provision": "tsx scripts/provision.ts"
   },
   "dependencies": {
