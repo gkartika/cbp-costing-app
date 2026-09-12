@@ -269,33 +269,50 @@ export function MasterDataAdmin() {
 
       {activeTableMeta && (
         <>
+          <div className="card">
+            <div className="section-actions">
+              <h2 style={{ marginBottom: 0 }}>{activeTableMeta.tabName.replace(/_/g, " ")}</h2>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <a
+                  className="btn secondary small"
+                  href={`/api/master-data/${selectedTable}/export-xlsx`}
+                  download={`${activeTableMeta.tabName}.xlsx`}
+                >
+                  Export (.xlsx)
+                </a>
+                <label className="btn secondary small" style={{ cursor: "pointer", margin: 0 }}>
+                  Bulk import (.xlsx)
+                  <input
+                    type="file"
+                    accept=".xlsx"
+                    style={{ display: "none" }}
+                    disabled={busy}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleBulkImport(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+            <p className="helptext">
+              Export mengunduh baris aktif tabel ini persis dalam format yang bisa diedit di Excel lalu diunggah
+              kembali lewat Bulk import — cocok untuk mengubah banyak harga sekaligus tanpa edit satu-satu di web.
+            </p>
+            {importMsg && <p className="helptext">{importMsg}</p>}
+          </div>
+
           {selectedTable === "trading_price_tiers" ? (
             <TradingPricelistMatrix onChanged={() => loadTableData(selectedTable)} />
           ) : (
             <div className="card">
               <div className="section-actions">
                 <h2 style={{ marginBottom: 0 }}>{activeTableMeta.tabName.replace(/_/g, " ")} — Active Rows</h2>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <label className="btn secondary small" style={{ cursor: "pointer", margin: 0 }}>
-                    Bulk import (.xlsx)
-                    <input
-                      type="file"
-                      accept=".xlsx"
-                      style={{ display: "none" }}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleBulkImport(file);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <button className="btn small" onClick={openAdd} disabled={busy}>
-                    + Add row
-                  </button>
-                </div>
+                <button className="btn small" onClick={openAdd} disabled={busy}>
+                  + Add row
+                </button>
               </div>
-              {importMsg && <p className="helptext">{importMsg}</p>}
               <div className="table-scroll">
                 <table>
                   <thead>

@@ -269,6 +269,18 @@ revert that breaks something else is caught before it lands.
   auto-generated Trading line description, even though pricing logic still
   never reads it. Lesson: "no calc code reads it" isn't the same test as
   "nobody needs it" — check admin/display uses too before dropping a column.
+- **Every master-data table now has an "Export (.xlsx)" button** next to
+  Bulk import, on both the generic row-by-row editor and the Trading Price
+  Tiers matrix. It downloads active rows in exactly the shape Bulk import
+  reads back (`GET /api/master-data/<table>/export-xlsx`, built by
+  `exportTableXlsx`), so editing many prices means Export → change values in
+  Excel → Bulk import, not one row at a time in the browser. Verified
+  round-trip: an unmodified re-import of an export stages every row as a
+  no-op "update" (0 creates, 0 skipped), including reference columns
+  (`trading_price_tiers.item_id` written and read back as the item's
+  `source_key`, not its internal id). Bulk import still only stages —
+  Publish (or, for Trading Price Tiers, the matrix's Save) is a separate
+  step, so a bad re-import doesn't go live until reviewed.
 - **Logs.** Every request emits one JSON line with method, path, status,
   duration and `requestId` — the same `requestId` recorded on `audit_events`,
   so a reported bad quote can be traced across both.
