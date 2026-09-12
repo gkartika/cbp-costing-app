@@ -119,7 +119,10 @@ type Lookups = {
   coatingCodes: string[];
   coatingLabels: Record<string, string>;
   leadTimeBucketsByFamily: Record<string, { label: string; value: number; ruleId: string }[]>;
-  tradingItemsByCategory: Record<string, { tradingItemId: string; sizeLabel: string }[]>;
+  tradingItemsByCategory: Record<
+    string,
+    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string }[]
+  >;
   threadConditionsByFamily: Record<string, string[]>;
   defaultWeightTolerancePercent: number;
 };
@@ -1174,7 +1177,16 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             <span className="field-label">Route</span>
             <select
               value={form.route}
-              onChange={(e) => setForm({ ...form, route: e.target.value as LineForm["route"] })}
+              onChange={(e) => {
+                const route = e.target.value as LineForm["route"];
+                // Trading is a fixed pricelist item, not made to order -- standard
+                // delivery is 7 days. Custom Production keeps the general 4-minggu
+                // default. Only resets when still at a default, so switching route
+                // back and forth doesn't clobber a lead time the user already picked.
+                const stillDefault = form.leadTimeDays === "7" || form.leadTimeDays === "28";
+                const leadTimeDays = stillDefault ? (route === "TRADING" ? "7" : "28") : form.leadTimeDays;
+                setForm({ ...form, route, leadTimeDays });
+              }}
             >
               <option value="">-- pilih --</option>
               <option value="CUSTOM">Custom Production</option>
@@ -1350,7 +1362,8 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                   <option value="">— use trading quote instead —</option>
                   {availableTradingItems.map((t) => (
                     <option key={t.tradingItemId} value={t.tradingItemId}>
-                      {form.productFamily} {t.sizeLabel}
+                      {t.productName} {t.sizeLabel}
+                      {t.gradeOrSpec ? ` — Grade ${t.gradeOrSpec}` : ""}
                     </option>
                   ))}
                 </select>

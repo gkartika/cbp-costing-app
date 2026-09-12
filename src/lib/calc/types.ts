@@ -102,6 +102,8 @@ export type TradingItemRow = {
   tradingItemId: string;
   sourceKey: string;
   productCategory: string;
+  productName: string;
+  gradeOrSpec: string | null;
   sizeLabel: string;
 };
 

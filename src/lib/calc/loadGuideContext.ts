@@ -131,8 +131,16 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
        FROM adjustment_rules WHERE guide_version_id = $1 AND active`,
       [guideVersionId],
     ),
-    pool.query<{ trading_item_id: string; source_key: string; product_category: string; size_label: string }>(
-      `SELECT trading_item_id, source_key, product_category, size_label FROM trading_items WHERE guide_version_id = $1 AND active`,
+    pool.query<{
+      trading_item_id: string;
+      source_key: string;
+      product_category: string;
+      product_name: string;
+      grade_or_spec: string | null;
+      size_label: string;
+    }>(
+      `SELECT trading_item_id, source_key, product_category, product_name, grade_or_spec, size_label
+       FROM trading_items WHERE guide_version_id = $1 AND active`,
       [guideVersionId],
     ),
     pool.query<{ tier_id: string; trading_item_id: string; qty_min: number; qty_max: number | null; unit_price: string }>(
@@ -262,6 +270,8 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
         tradingItemId: r.trading_item_id,
         sourceKey: r.source_key,
         productCategory: r.product_category,
+        productName: r.product_name,
+        gradeOrSpec: r.grade_or_spec,
         sizeLabel: r.size_label,
       }),
     ),

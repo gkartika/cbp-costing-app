@@ -217,6 +217,37 @@ revert that breaks something else is caught before it lands.
   a component can land in a quantity band the set count alone would not reach,
   and dies amortise over the larger run. If a set looks cheaper than the team
   expects, check the band on the component's Explain first.
+- **Trading item picker now shows grade, not just size — pick carefully on
+  quotes calculated before 2026-09-12.** Most Nut sizes carry 3-6 items, one
+  per grade (2H/4.6/8.8/B8/B8M/F10), each priced very differently, but the
+  dropdown used to render every one of them as just "Nut M12" with no way to
+  tell which was selected — `tradingItemsByCategory` never carried
+  `grade_or_spec`/`product_name` past the loader. Now shows e.g. "Heavy Hex
+  Nut M12 — Grade 2H". A Trading line saved before this fix may have the
+  wrong grade silently priced in; re-open and confirm against the dropdown,
+  which now names the grade it actually resolved.
+- **8 Heavy Hex Nut 2H sizes (M48, M52, M56, M64, M72, M80, M90, M100) were
+  removed from the Trading pricelist** (business-confirmed 2026-09-12: not
+  actually stocked/traded) via `npm run remove:unavailable-trading-nuts`.
+  They were imported with zero `trading_price_tiers` rows, so selecting any
+  of them threw `tradingTierNotFound()` at any quantity — unusable, not just
+  wrong. M8 is unaffected: its other two grades (4.6, 8.8) price fine; only
+  the M8/F10 combination is still tierless and is a separate open gap (see
+  next item), not a removed size.
+- **Known open gap, not yet fixed: some Trading items are missing a
+  mid-range price tier**, so an order landing in the gap is quoted at the
+  smaller-quantity (more expensive) tier via the inherit-lower-tier fallback
+  instead of a real discount. Nut B8/B8M (M12-M24) have no tier for qty
+  26-50; Washer F844 has none for qty 101-250; Nut M8/F10 has no tiers at
+  all. Confirmed as real missing source-spreadsheet rows, not a resolution
+  bug — deferred, fix later.
+- **Trading items' `weight_kg`/`market_min`/`market_max`/`price_per_kg`/
+  `pitch`/`width_flat`/`thickness`/`material`/`unit_system`/`currency`
+  columns were dropped** (migration `1700000028000`) — audited 2026-09-12,
+  none were ever read by any calc, API, or UI code; Trading always prices
+  off `trading_price_tiers.unit_price` alone. `purchase_price` and
+  `purchase_price_ex_tax` were kept as Super Admin's internal cost
+  reference, even though the engine doesn't price off them either.
 - **Logs.** Every request emits one JSON line with method, path, status,
   duration and `requestId` — the same `requestId` recorded on `audit_events`,
   so a reported bad quote can be traced across both.

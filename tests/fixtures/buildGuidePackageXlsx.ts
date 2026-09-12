@@ -137,7 +137,7 @@ export async function buildGuidePackageXlsx(opts: BuildOptions): Promise<Buffer>
       ["RULE-BOLT-LENGTH-0-6D", "Custom Production", "Length Ratio", "Bolt", "length_diameter_ratio", 0, 6, "percent_add", 0, "base_price_per_item", true, true, true],
     ],
     Trading_Items: [
-      ["item_id", "product_category", "product_name", "grade_or_spec", "material", "unit_system", "size_label", "pitch", "width_flat", "thickness", "weight_kg", "purchase_price", "purchase_price_ex_tax", "market_min", "market_max", "price_per_kg", "currency", "active"],
+      ["item_id", "product_category", "product_name", "grade_or_spec", "size_label", "purchase_price", "purchase_price_ex_tax", "active"],
     ],
     Trading_Price_Tiers: [
       ["tier_id", "item_id", "tier_label", "qty_min", "qty_max", "unit_price", "currency", "pricing_unit", "active"],

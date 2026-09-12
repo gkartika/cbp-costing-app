@@ -251,19 +251,12 @@ export const TAB_SPECS: TabSpec[] = [
       { header: "product_category", dbColumn: "product_category", type: "string", required: true },
       { header: "product_name", dbColumn: "product_name", type: "string", required: true },
       { header: "grade_or_spec", dbColumn: "grade_or_spec", type: "string", required: false },
-      { header: "material", dbColumn: "material", type: "string", required: false },
-      { header: "unit_system", dbColumn: "unit_system", type: "string", required: false },
       { header: "size_label", dbColumn: "size_label", type: "string", required: true },
-      { header: "pitch", dbColumn: "pitch", type: "number", required: false },
-      { header: "width_flat", dbColumn: "width_flat", type: "number", required: false },
-      { header: "thickness", dbColumn: "thickness", type: "number", required: false },
-      { header: "weight_kg", dbColumn: "weight_kg", type: "number", required: false },
+      // purchase_price / purchase_price_ex_tax: Super Admin's internal cost
+      // reference only -- the engine prices Trading lines off
+      // trading_price_tiers.unit_price, never off these.
       { header: "purchase_price", dbColumn: "purchase_price", type: "number", required: false },
       { header: "purchase_price_ex_tax", dbColumn: "purchase_price_ex_tax", type: "number", required: false },
-      { header: "market_min", dbColumn: "market_min", type: "number", required: false },
-      { header: "market_max", dbColumn: "market_max", type: "number", required: false },
-      { header: "price_per_kg", dbColumn: "price_per_kg", type: "number", required: false },
-      { header: "currency", dbColumn: "currency", type: "string", required: false },
       activeCol,
     ],
   },

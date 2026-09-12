@@ -111,11 +111,26 @@ export const GET = apiHandler(async () => {
   }
   Object.values(leadTimeBucketsByFamily).forEach((list) => list.sort((a, b) => a.value - b.value));
 
-  const tradingItemsByCategory: Record<string, { tradingItemId: string; sizeLabel: string }[]> = {};
+  // gradeOrSpec/productName ride along so the picker can show which specific
+  // item a size resolves to -- most Trading sizes are shared by several
+  // grades (e.g. Nut M12 across 2H/4.6/8.8/B8/B8M/F10), each priced
+  // differently, and size alone can't tell them apart.
+  const tradingItemsByCategory: Record<
+    string,
+    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string }[]
+  > = {};
   for (const item of ctx.tradingItems) {
     const list = tradingItemsByCategory[item.productCategory] ?? (tradingItemsByCategory[item.productCategory] = []);
-    list.push({ tradingItemId: item.tradingItemId, sizeLabel: item.sizeLabel });
+    list.push({
+      tradingItemId: item.tradingItemId,
+      sizeLabel: item.sizeLabel,
+      gradeOrSpec: item.gradeOrSpec,
+      productName: item.productName,
+    });
   }
+  Object.values(tradingItemsByCategory).forEach((list) =>
+    list.sort((a, b) => a.sizeLabel.localeCompare(b.sizeLabel, undefined, { numeric: true }) || (a.gradeOrSpec ?? "").localeCompare(b.gradeOrSpec ?? "")),
+  );
 
   // Thread condition is only a real choice where the guide actually prices two
   // or more of them at the same grade+size — today that is Bolt (HT vs FT).
