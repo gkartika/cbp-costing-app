@@ -105,6 +105,7 @@ export type TradingItemRow = {
   productName: string;
   gradeOrSpec: string | null;
   sizeLabel: string;
+  pitch: string | null;
 };
 
 export type TradingPriceTierRow = {

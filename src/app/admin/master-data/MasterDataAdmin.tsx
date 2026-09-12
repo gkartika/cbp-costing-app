@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { TradingPricelistMatrix } from "./TradingPricelistMatrix";
 
 type ColumnMeta = {
   header: string;
@@ -268,73 +269,77 @@ export function MasterDataAdmin() {
 
       {activeTableMeta && (
         <>
-          <div className="card">
-            <div className="section-actions">
-              <h2 style={{ marginBottom: 0 }}>{activeTableMeta.tabName.replace(/_/g, " ")} — Active Rows</h2>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <label className="btn secondary small" style={{ cursor: "pointer", margin: 0 }}>
-                  Bulk import (.xlsx)
-                  <input
-                    type="file"
-                    accept=".xlsx"
-                    style={{ display: "none" }}
-                    disabled={busy}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleBulkImport(file);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-                <button className="btn small" onClick={openAdd} disabled={busy}>
-                  + Add row
-                </button>
+          {selectedTable === "trading_price_tiers" ? (
+            <TradingPricelistMatrix onChanged={() => loadTableData(selectedTable)} />
+          ) : (
+            <div className="card">
+              <div className="section-actions">
+                <h2 style={{ marginBottom: 0 }}>{activeTableMeta.tabName.replace(/_/g, " ")} — Active Rows</h2>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <label className="btn secondary small" style={{ cursor: "pointer", margin: 0 }}>
+                    Bulk import (.xlsx)
+                    <input
+                      type="file"
+                      accept=".xlsx"
+                      style={{ display: "none" }}
+                      disabled={busy}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleBulkImport(file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button className="btn small" onClick={openAdd} disabled={busy}>
+                    + Add row
+                  </button>
+                </div>
+              </div>
+              {importMsg && <p className="helptext">{importMsg}</p>}
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{activeTableMeta.keyHeader}</th>
+                      {activeTableMeta.columns.map((c) => (
+                        <th key={c.dbColumn}>{c.header}</th>
+                      ))}
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.source_key as string}>
+                        <td className="mono">{row.source_key as string}</td>
+                        {activeTableMeta.columns.map((c) => (
+                          <td key={c.dbColumn} className={c.type === "number" ? "mono" : undefined}>
+                            {String(row[c.dbColumn] ?? "—")}
+                          </td>
+                        ))}
+                        <td>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button className="btn secondary small" onClick={() => openEdit(row)} disabled={busy}>
+                              Edit
+                            </button>
+                            <button className="icon-btn" onClick={() => stageDeactivate(row)} disabled={busy} title="Deactivate">
+                              ✕
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {rows.length === 0 && (
+                      <tr>
+                        <td colSpan={activeTableMeta.columns.length + 2} className="empty-state">
+                          No active rows.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
-            {importMsg && <p className="helptext">{importMsg}</p>}
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>{activeTableMeta.keyHeader}</th>
-                    {activeTableMeta.columns.map((c) => (
-                      <th key={c.dbColumn}>{c.header}</th>
-                    ))}
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.source_key as string}>
-                      <td className="mono">{row.source_key as string}</td>
-                      {activeTableMeta.columns.map((c) => (
-                        <td key={c.dbColumn} className={c.type === "number" ? "mono" : undefined}>
-                          {String(row[c.dbColumn] ?? "—")}
-                        </td>
-                      ))}
-                      <td>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button className="btn secondary small" onClick={() => openEdit(row)} disabled={busy}>
-                            Edit
-                          </button>
-                          <button className="icon-btn" onClick={() => stageDeactivate(row)} disabled={busy} title="Deactivate">
-                            ✕
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {rows.length === 0 && (
-                    <tr>
-                      <td colSpan={activeTableMeta.columns.length + 2} className="empty-state">
-                        No active rows.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          )}
 
           <div className="card">
             <div className="section-actions">

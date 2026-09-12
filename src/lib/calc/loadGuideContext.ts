@@ -138,8 +138,9 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
       product_name: string;
       grade_or_spec: string | null;
       size_label: string;
+      pitch: string | null;
     }>(
-      `SELECT trading_item_id, source_key, product_category, product_name, grade_or_spec, size_label
+      `SELECT trading_item_id, source_key, product_category, product_name, grade_or_spec, size_label, pitch
        FROM trading_items WHERE guide_version_id = $1 AND active`,
       [guideVersionId],
     ),
@@ -273,6 +274,7 @@ export async function loadGuideContext(guideVersionId: string): Promise<GuideCon
         productName: r.product_name,
         gradeOrSpec: r.grade_or_spec,
         sizeLabel: r.size_label,
+        pitch: r.pitch,
       }),
     ),
     tradingPriceTiers: tradingPriceTiers.rows.map(

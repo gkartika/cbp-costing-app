@@ -252,6 +252,10 @@ export const TAB_SPECS: TabSpec[] = [
       { header: "product_name", dbColumn: "product_name", type: "string", required: true },
       { header: "grade_or_spec", dbColumn: "grade_or_spec", type: "string", required: false },
       { header: "size_label", dbColumn: "size_label", type: "string", required: true },
+      // Thread pitch designation (e.g. "T16", "T14") -- reference only, never
+      // read by pricing logic, but shown next to size in the pricelist
+      // matrix and folded into the line description.
+      { header: "pitch", dbColumn: "pitch", type: "string", required: false },
       // purchase_price / purchase_price_ex_tax: Super Admin's internal cost
       // reference only -- the engine prices Trading lines off
       // trading_price_tiers.unit_price, never off these.

@@ -117,7 +117,7 @@ export const GET = apiHandler(async () => {
   // differently, and size alone can't tell them apart.
   const tradingItemsByCategory: Record<
     string,
-    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string }[]
+    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string; pitch: string | null }[]
   > = {};
   for (const item of ctx.tradingItems) {
     const list = tradingItemsByCategory[item.productCategory] ?? (tradingItemsByCategory[item.productCategory] = []);
@@ -126,6 +126,7 @@ export const GET = apiHandler(async () => {
       sizeLabel: item.sizeLabel,
       gradeOrSpec: item.gradeOrSpec,
       productName: item.productName,
+      pitch: item.pitch,
     });
   }
   Object.values(tradingItemsByCategory).forEach((list) =>

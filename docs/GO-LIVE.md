@@ -248,6 +248,27 @@ revert that breaks something else is caught before it lands.
   off `trading_price_tiers.unit_price` alone. `purchase_price` and
   `purchase_price_ex_tax` were kept as Super Admin's internal cost
   reference, even though the engine doesn't price off them either.
+- **Trading Price Tiers now has a matrix editor** (Master Data → Trading
+  Price Tiers), replacing the one-row-at-a-time form for that table only:
+  pick a category/product/grade, and every size x quantity-tier combination
+  for it is one editable grid (size + pitch as reference columns, existing
+  tiers pre-filled, missing combinations shown as blank editable cells).
+  Save both stages and publishes immediately — no separate review step, by
+  design (confirmed 2026-09-12) — so a typo goes live on the next Save with
+  no chance to catch it first; the golden simulation cases still run and
+  block publish on a genuine failure, but a merely-wrong price is not
+  caught. Filling a blank cell creates a brand-new `trading_price_tiers` row
+  (source key `TIER-<item>-<qtyMin>[-qtyMax]`); it does not invent new
+  quantity-tier boundaries beyond whatever already exists somewhere in that
+  grade. All other master-data tables keep the old row-by-row
+  stage-then-publish editor.
+- **`pitch`, dropped from `trading_items` in the column cleanup above, was
+  restored the same day** (migration `1700000029000`) as TEXT rather than
+  the original NUMERIC — it's a real reference field (thread designation,
+  e.g. "T16") shown in the pricelist matrix and folded into the
+  auto-generated Trading line description, even though pricing logic still
+  never reads it. Lesson: "no calc code reads it" isn't the same test as
+  "nobody needs it" — check admin/display uses too before dropping a column.
 - **Logs.** Every request emits one JSON line with method, path, status,
   duration and `requestId` — the same `requestId` recorded on `audit_events`,
   so a reported bad quote can be traced across both.

@@ -121,7 +121,7 @@ type Lookups = {
   leadTimeBucketsByFamily: Record<string, { label: string; value: number; ruleId: string }[]>;
   tradingItemsByCategory: Record<
     string,
-    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string }[]
+    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string; pitch: string | null }[]
   >;
   threadConditionsByFamily: Record<string, string[]>;
   defaultWeightTolerancePercent: number;
@@ -216,12 +216,16 @@ function formatSizeForDescription(sizeLabel: string): string {
  * ships ambiguous about either. Returns "" for families with no agreed
  * format, leaving the existing "family + grade" fallback in the summary
  * untouched.
+ *
+ * `pitch` (Trading only, e.g. "T16") is folded in right after size --
+ * inch-thread items with the same size can carry different pitches, and the
+ * quotation should name the exact thread the price applies to.
  */
-function defaultDescription(f: LineForm, gradeLabel: string, coatingLabel: string): string {
+function defaultDescription(f: LineForm, gradeLabel: string, coatingLabel: string, pitch?: string | null): string {
   const grade = gradeLabel || f.gradeInput;
   const rawSize = f.sizeLabel || (f.diameterMm ? `M${f.diameterMm}` : "");
   if (!f.productFamily || !grade || !rawSize) return "";
-  const size = formatSizeForDescription(rawSize);
+  const size = formatSizeForDescription(rawSize) + (pitch ? ` (${pitch})` : "");
   const coatingSuffix = `, ${coatingLabel || "Plain"}`;
 
   if (f.productFamily === "Bolt") {
@@ -247,6 +251,7 @@ function formToBody(
   gradeLabel = "",
   kind: "item" | "set" | "component" = "item",
   coatingLabel = "",
+  pitch: string | null = null,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   const set = (key: string, raw: string, parse: (s: string) => unknown = (s) => s) => {
@@ -273,7 +278,7 @@ function formToBody(
   set("productFamily", f.productFamily);
   // A blank Description falls back to CBP's standard format rather than
   // staying empty, so the quotation never ships an unlabelled line.
-  set("description", f.description || defaultDescription(f, gradeLabel, coatingLabel));
+  set("description", f.description || defaultDescription(f, gradeLabel, coatingLabel, pitch));
   set("gradeInput", f.gradeInput);
   set("threadCondition", f.threadCondition);
   set("sizeLabel", f.sizeLabel);
@@ -473,17 +478,21 @@ const CUSTOMER_ADD_NEW = "__add_new__";
     try {
       const gradeLabel = gradeLabelFor(form.productFamily, form.gradeInput) ?? "";
       const coatingLabel = lookups.coatingLabels[form.coatingCode] ?? form.coatingCode;
+      const tradingItemPitch =
+        (form.productFamily ? lookups.tradingItemsByCategory[form.productFamily] : undefined)?.find(
+          (t) => t.tradingItemId === form.tradingItemId,
+        )?.pitch ?? null;
       const kind = panel.kind ?? "item";
       if (panel.mode === "add") {
         await apiPost(`/api/costings/${costing.costingId}/lines`, {
-          ...formToBody(form, "add", gradeLabel, kind, coatingLabel),
+          ...formToBody(form, "add", gradeLabel, kind, coatingLabel, tradingItemPitch),
           ...(kind === "component" ? { parentLineId: panel.parentLineId } : {}),
         });
       } else if (panel.mode === "edit" && panel.lineId) {
         const line = lines.find((l) => l.costingLineId === panel.lineId)!;
         await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
           expectedUpdatedAt: line.updatedAt,
-          ...formToBody(form, "edit", gradeLabel, kind, coatingLabel),
+          ...formToBody(form, "edit", gradeLabel, kind, coatingLabel, tradingItemPitch),
         });
       }
       setPanel({ mode: "closed" });
@@ -1363,6 +1372,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                   {availableTradingItems.map((t) => (
                     <option key={t.tradingItemId} value={t.tradingItemId}>
                       {t.productName} {t.sizeLabel}
+                      {t.pitch ? ` (${t.pitch})` : ""}
                       {t.gradeOrSpec ? ` — Grade ${t.gradeOrSpec}` : ""}
                     </option>
                   ))}
