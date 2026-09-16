@@ -115,6 +115,9 @@ export function CustomersAdmin({
   const [importBusy, setImportBusy] = useState(false);
   const [importResults, setImportResults] = useState<ImportOutcome[] | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [fileImportBusy, setFileImportBusy] = useState(false);
+  const [fileImportMsg, setFileImportMsg] = useState<string | null>(null);
+  const [fileImportError, setFileImportError] = useState<string | null>(null);
 
   async function refresh() {
     const res = await fetch("/api/customers");
@@ -243,6 +246,30 @@ export function CustomersAdmin({
     }
   }
 
+  async function handleBulkImportFile(file: File) {
+    setFileImportBusy(true);
+    setFileImportError(null);
+    setFileImportMsg(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/customers/import-xlsx", { method: "POST", body: formData });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error?.message ?? "Import gagal.");
+      const skipped = (body.skipped as { row: number; reason: string }[]) ?? [];
+      setFileImportMsg(
+        `${body.summary.created} baru, ${body.summary.updated} diperbarui` +
+          (body.summary.errors > 0 ? `, ${body.summary.errors} gagal: ${skipped.map((s) => `baris ${s.row} (${s.reason})`).join("; ")}` : "."),
+      );
+      await refresh();
+      router.refresh();
+    } catch (e) {
+      setFileImportError(e instanceof Error ? e.message : "Import gagal.");
+    } finally {
+      setFileImportBusy(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <div style={{ marginBottom: 16 }}>
@@ -288,6 +315,44 @@ export function CustomersAdmin({
           </p>
         )}
       </div>
+
+      {isSuperAdmin && (
+        <div className="card">
+          <div className="section-actions">
+            <h2 style={{ marginBottom: 0 }}>Export / Bulk Import (.xlsx)</h2>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <a className="btn secondary small" href="/api/customers/export-xlsx" download="Customers.xlsx">
+                Export (.xlsx)
+              </a>
+              <label className="btn secondary small" style={{ cursor: "pointer", margin: 0 }}>
+                Bulk import (.xlsx)
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  style={{ display: "none" }}
+                  disabled={fileImportBusy}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleBulkImportFile(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+          <p className="helptext">
+            Export mengunduh semua customer aktif persis dalam format yang bisa diedit di Excel lalu diunggah kembali
+            lewat Bulk import — cocok untuk mengubah banyak data sekaligus tanpa edit satu-satu di web. Customer yang
+            sudah ada dicocokkan lewat Nama Customer; kolom kosong tidak menimpa nilai yang sudah tersimpan.
+          </p>
+          {fileImportError && (
+            <p className="error-note" role="alert">
+              {fileImportError}
+            </p>
+          )}
+          {fileImportMsg && <p className="helptext">{fileImportMsg}</p>}
+        </div>
+      )}
 
       {isSuperAdmin && (
         <div className="card">

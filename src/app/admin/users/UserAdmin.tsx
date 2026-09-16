@@ -35,6 +35,32 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetDone, setResetDone] = useState<string | null>(null);
 
+  const [nameTargetId, setNameTargetId] = useState<string | null>(null);
+  const [nameValue, setNameValue] = useState("");
+  const [nameBusy, setNameBusy] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+
+  async function handleRenameUser(userId: string) {
+    setNameBusy(true);
+    setNameError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/display-name`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: nameValue.trim() }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error?.message ?? "Gagal mengubah nama tampilan.");
+      setUsers((prev) => prev.map((u) => (u.userId === userId ? { ...u, displayName: body.displayName } : u)));
+      setNameTargetId(null);
+      setNameValue("");
+    } catch (e) {
+      setNameError(e instanceof Error ? e.message : "Gagal mengubah nama tampilan.");
+    } finally {
+      setNameBusy(false);
+    }
+  }
+
   async function handleResetPassword(userId: string) {
     setResetBusy(true);
     setResetError(null);
@@ -191,6 +217,11 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
 
       <div className="card">
         <h2>Semua User</h2>
+        {nameError && (
+          <p className="error-note" role="alert">
+            {nameError}
+          </p>
+        )}
         {resetError && (
           <p className="error-note" role="alert">
             {resetError}
@@ -223,7 +254,51 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
                       </span>
                     )}
                   </td>
-                  <td>{u.displayName}</td>
+                  <td>
+                    {nameTargetId === u.userId ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <input
+                          type="text"
+                          value={nameValue}
+                          onChange={(e) => setNameValue(e.target.value)}
+                          placeholder="nama tampilan"
+                          style={{ width: 150 }}
+                        />
+                        <button
+                          onClick={() => handleRenameUser(u.userId)}
+                          disabled={nameBusy || nameValue.trim().length === 0}
+                          className="btn small"
+                        >
+                          {nameBusy ? "…" : "Simpan"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setNameTargetId(null);
+                            setNameValue("");
+                            setNameError(null);
+                          }}
+                          className="btn secondary small"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    ) : (
+                      <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                        {u.displayName}
+                        <button
+                          onClick={() => {
+                            setNameTargetId(u.userId);
+                            setNameValue(u.displayName);
+                            setNameError(null);
+                          }}
+                          className="link-btn"
+                          style={{ fontSize: 12 }}
+                        >
+                          Edit
+                        </button>
+                      </span>
+                    )}
+                  </td>
                   <td>{u.roles.map((r) => ROLE_LABELS[r] ?? r).join(", ") || "—"}</td>
                   <td>
                     {!u.active ? (
