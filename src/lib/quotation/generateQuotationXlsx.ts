@@ -168,21 +168,36 @@ export async function generateQuotationXlsx(doc: QuotationDocument): Promise<Buf
     });
   });
 
-  // ---------------------------------------------------------------- total
-  const totalRowNo = headerRowNo + doc.lines.length + 1;
-  const totalRow = sheet.getRow(totalRowNo);
-  totalRow.height = 22;
-  sheet.mergeCells(totalRowNo, 1, totalRowNo, 4);
-  const totalLabel = sheet.getCell(totalRowNo, 1);
-  totalLabel.value = "TOTAL (belum termasuk PPN)";
-  totalLabel.font = { name: FONT, size: 10, bold: true, color: { argb: PURPLE } };
-  totalLabel.alignment = { horizontal: "right", vertical: "middle" };
-  const totalValue = sheet.getCell(totalRowNo, 5);
-  totalValue.value = doc.totalExPpn;
-  totalValue.numFmt = MONEY;
-  totalValue.font = { name: FONT, size: 11, bold: true, color: { argb: PURPLE } };
-  totalValue.alignment = { horizontal: "right", vertical: "middle" };
-  totalValue.fill = { type: "pattern", pattern: "solid", fgColor: { argb: YELLOW } };
+  // ---------------------------------------------------------------- totals
+  const showDiscountBreakdown = doc.lineDiscountTotal > 0 || doc.totalDiscountAmount > 0;
+  const totalsRows: { label: string; value: number; bold?: boolean; highlight?: boolean }[] = [];
+  if (showDiscountBreakdown) {
+    totalsRows.push({ label: "Subtotal", value: doc.subtotal });
+    if (doc.lineDiscountTotal > 0) totalsRows.push({ label: "Diskon per item", value: -doc.lineDiscountTotal });
+    if (doc.totalDiscountAmount > 0) totalsRows.push({ label: "Diskon total", value: -doc.totalDiscountAmount });
+  }
+  totalsRows.push({ label: "Total sebelum PPN", value: doc.totalExPpn });
+  totalsRows.push({ label: `PPN ${(doc.ppnRate * 100).toFixed(0)}%`, value: doc.ppnAmount });
+  totalsRows.push({ label: "TOTAL", value: doc.grandTotal, bold: true, highlight: true });
+
+  const firstTotalRowNo = headerRowNo + doc.lines.length + 1;
+  totalsRows.forEach((t, i) => {
+    const rowNo = firstTotalRowNo + i;
+    const row = sheet.getRow(rowNo);
+    row.height = 22;
+    sheet.mergeCells(rowNo, 1, rowNo, 4);
+    const label = sheet.getCell(rowNo, 1);
+    label.value = t.label;
+    label.font = { name: FONT, size: t.bold ? 10 : 9, bold: t.bold ?? false, color: { argb: t.highlight ? PURPLE : "FF1A1A1A" } };
+    label.alignment = { horizontal: "right", vertical: "middle" };
+    const value = sheet.getCell(rowNo, 5);
+    value.value = t.value;
+    value.numFmt = MONEY;
+    value.font = { name: FONT, size: t.bold ? 11 : 9, bold: t.bold ?? false, color: { argb: PURPLE } };
+    value.alignment = { horizontal: "right", vertical: "middle" };
+    if (t.highlight) value.fill = { type: "pattern", pattern: "solid", fgColor: { argb: YELLOW } };
+  });
+  const totalRowNo = firstTotalRowNo + totalsRows.length - 1;
 
   // ---------------------------------------------------------------- terms
   let r = totalRowNo + 2;

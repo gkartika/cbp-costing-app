@@ -30,6 +30,12 @@ export type CostingLineRow = {
   margin_percent: string | null;
   trading_item_id: string | null;
   trading_quote_id: string | null;
+  discount_type: "PERCENT" | "AMOUNT" | null;
+  discount_value: string | null;
+  pitch_type: "STANDARD" | "CUSTOM" | null;
+  pitch_value: string | null;
+  chosen_price_kind: "PRODUCTION" | "TRADING" | null;
+  unit_price_override: string | null;
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
@@ -68,6 +74,12 @@ export function serializeCostingLine(row: CostingLineRow, hasCurrentSnapshot: bo
     marginPercent: num(row.margin_percent),
     tradingItemId: row.trading_item_id,
     tradingQuoteId: row.trading_quote_id,
+    discountType: row.discount_type,
+    discountValue: num(row.discount_value),
+    pitchType: row.pitch_type,
+    pitchValue: row.pitch_value,
+    chosenPriceKind: row.chosen_price_kind,
+    unitPriceOverride: num(row.unit_price_override),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,

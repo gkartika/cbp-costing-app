@@ -4,12 +4,11 @@ import { requireUser } from "@/lib/http/requestContext";
 import { pool } from "@/lib/db";
 
 /**
- * Names of active users, for the Salesperson picker on a quotation.
- *
- * Deliberately separate from /api/admin/users (Super Admin only): that route
- * manages accounts and exposes roles and reset state, while this one returns
- * nothing but a display name. Every authenticated user can already see who
- * owns each costing, so a name list adds no visibility they lack.
+ * A minimal, any-authenticated-user directory (id + display name only) for
+ * populating pickers like the Reports salesperson filter — unlike
+ * /api/admin/users, this carries no roles/status and isn't Super Admin gated,
+ * matching the "everyone reads everything" read model already used for
+ * costings and customers.
  */
 export const GET = apiHandler(async () => {
   await requireUser();
@@ -18,7 +17,5 @@ export const GET = apiHandler(async () => {
     `SELECT user_id, display_name FROM users WHERE active = TRUE ORDER BY display_name`,
   );
 
-  return NextResponse.json({
-    users: rows.map((r) => ({ userId: r.user_id, displayName: r.display_name })),
-  });
+  return NextResponse.json({ users: rows.map((r) => ({ userId: r.user_id, displayName: r.display_name })) });
 });

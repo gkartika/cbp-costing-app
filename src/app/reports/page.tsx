@@ -16,7 +16,7 @@ export default async function ReportsPage() {
 
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>Laporan</h1>
             <p>Quotation &amp; PO</p>

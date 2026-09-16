@@ -21,8 +21,11 @@ type Costing = {
   validityDays: number;
   paymentTermsOverride: string | null;
   accountPaymentTerms: string | null;
+  accountMarkupPercent: number | null;
   signedByName: string | null;
   signedByTitle: string | null;
+  totalDiscountType: "PERCENT" | "AMOUNT" | null;
+  totalDiscountValue: number | null;
   updatedAt: string;
   canEdit: boolean;
 };
@@ -81,21 +84,34 @@ type Line = {
   weightTolerancePercent: number | null;
   marginPercent: number | null;
   tradingItemId: string | null;
+  tradingQuoteId: string | null;
+  discountType: "PERCENT" | "AMOUNT" | null;
+  discountValue: number | null;
+  pitchType: "STANDARD" | "CUSTOM" | null;
+  pitchValue: string | null;
+  chosenPriceKind: "PRODUCTION" | "TRADING" | null;
+  unitPriceOverride: number | null;
   updatedAt: string;
   needsRecalculation: boolean;
   latestUnitSellingPrice: number | null;
   latestOrderTotal: number | null;
+  productionUnitSellingPrice: number | null;
+  productionOrderTotal: number | null;
+  tradingUnitSellingPrice: number | null;
+  tradingOrderTotal: number | null;
 };
 
 type LineForm = {
-  route: "TRADING" | "CUSTOM" | "";
   productFamily: string;
   description: string;
   gradeInput: string;
   threadCondition: string;
   sizeLabel: string;
   diameterMm: string;
+  /** Raw value as the user typed it, in whichever unit lengthUnit says — not necessarily mm despite the field's name (see formToBody's conversion). */
   lengthMm: string;
+  /** Bolt/Stud finished length is commonly quoted in inches too — converted to mm only when submitting (formToBody). */
+  lengthUnit: "mm" | "in";
   developedCutLengthMm: string;
   qty: string;
   leadTimeDays: string;
@@ -104,7 +120,9 @@ type LineForm = {
   diesTotalCost: string;
   weightTolerancePercent: string;
   marginPercent: string;
-  tradingItemId: string;
+  /** Standard has no price effect; Custom types a value and adds +10%. */
+  pitchType: "STANDARD" | "CUSTOM";
+  pitchValue: string;
   /** Components only: how many of this part go into one set. */
   qtyPerSet: string;
 };
@@ -119,11 +137,9 @@ type Lookups = {
   coatingCodes: string[];
   coatingLabels: Record<string, string>;
   leadTimeBucketsByFamily: Record<string, { label: string; value: number; ruleId: string }[]>;
-  tradingItemsByCategory: Record<
-    string,
-    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string; pitch: string | null }[]
-  >;
   threadConditionsByFamily: Record<string, string[]>;
+  /** Bolt/Nut standard (non-custom) thread pitch by family + size — a physical constant, not guide data. */
+  standardPitchByFamilySize: Record<string, Record<string, string>>;
   defaultWeightTolerancePercent: number;
 };
 
@@ -137,16 +153,29 @@ const EMPTY_LOOKUPS: Lookups = {
   coatingCodes: [],
   coatingLabels: {},
   leadTimeBucketsByFamily: {},
-  tradingItemsByCategory: {},
   threadConditionsByFamily: {},
+  standardPitchByFamilySize: {},
   defaultWeightTolerancePercent: 0,
 };
 
-/** Sentinel for "not in the user directory" in the Salesperson picker. */
-const SALESPERSON_OTHER = "__other__";
+/**
+ * Fallback lead-time options for a family with no guide-defined buckets of
+ * its own (e.g. Washer has none — adjustment_rules simply has no Lead Time
+ * rows scoped to it). Same day values and labels every other family uses, so
+ * the field looks and behaves identically regardless of family; the value
+ * submitted is a plain day count either way, guide-backed or not.
+ */
+const GENERIC_LEAD_TIME_OPTIONS = [
+  { value: 7, label: "7 hari" },
+  { value: 10, label: "10 hari" },
+  { value: 14, label: "2 minggu" },
+  { value: 21, label: "3 minggu" },
+  { value: 28, label: "4 minggu" },
+  { value: 35, label: "5 minggu" },
+  { value: 42, label: "6 minggu" },
+];
 
 const EMPTY_FORM: LineForm = {
-  route: "",
   productFamily: "",
   description: "",
   gradeInput: "",
@@ -154,6 +183,7 @@ const EMPTY_FORM: LineForm = {
   sizeLabel: "",
   diameterMm: "",
   lengthMm: "",
+  lengthUnit: "mm",
   developedCutLengthMm: "",
   qty: "1",
   // CBP's default lead time is 4 minggu (business-confirmed 2026-09-12) — the
@@ -165,20 +195,24 @@ const EMPTY_FORM: LineForm = {
   diesTotalCost: "",
   weightTolerancePercent: "",
   marginPercent: "",
-  tradingItemId: "",
+  pitchType: "STANDARD",
+  pitchValue: "",
   qtyPerSet: "1",
 };
 
 function lineToForm(l: Line): LineForm {
   return {
-    route: (l.route as "TRADING" | "CUSTOM" | null) ?? "",
     productFamily: l.productFamily ?? "",
     description: l.description ?? "",
     gradeInput: l.gradeInput ?? "",
     threadCondition: l.threadCondition ?? "",
     sizeLabel: l.sizeLabel ?? "",
     diameterMm: l.diameterMm?.toString() ?? "",
+    // Only mm is ever stored — an inch entry is converted at save time
+    // (formToBody) — so re-opening a line for edit always shows mm, even if
+    // it was originally typed in inches.
     lengthMm: l.lengthMm?.toString() ?? "",
+    lengthUnit: "mm",
     developedCutLengthMm: l.developedCutLengthMm?.toString() ?? "",
     qty: l.qty?.toString() ?? "1",
     leadTimeDays: l.leadTimeDays?.toString() ?? "",
@@ -191,7 +225,8 @@ function lineToForm(l: Line): LineForm {
     diesTotalCost: l.diesTotalCost?.toString() ?? "",
     weightTolerancePercent: l.weightTolerancePercent?.toString() ?? "",
     marginPercent: l.marginPercent?.toString() ?? "",
-    tradingItemId: l.tradingItemId ?? "",
+    pitchType: l.pitchType ?? "STANDARD",
+    pitchValue: l.pitchValue ?? "",
     qtyPerSet: l.qtyPerSet?.toString() ?? "1",
   };
 }
@@ -206,35 +241,44 @@ function formatSizeForDescription(sizeLabel: string): string {
 }
 
 /**
+ * Metric pitch is stored bare ("2.5") and gets a "P" prefix here so it reads
+ * as a pitch, not a size — "P2.5". Imperial pitch is already T-prefixed by
+ * convention (standard_pitches: "T13", "T4.5", ...) and is shown as-is.
+ */
+function formatPitchForDescription(rawSize: string, pitch: string): string {
+  return /^M\d/i.test(rawSize) ? `P${pitch}` : pitch;
+}
+
+/**
  * CBP's standard item description, used when the user leaves Description
  * blank so every quotation line reads consistently:
- *   Bolt   — "Bolt, A193-B7, HT M20x80, HDG"
- *   Nut    — "Nut, A194-2H, M20, Zinc"
+ *   Bolt   — "Bolt, A193-B7, HT, M20x80, P2.5, HDG"
+ *   Nut    — "Nut, A194-2H, M20, P2.5, Zinc"
  *   Washer — "Washer, A36, 3/4", Plain"
  * Uses the grade's display label (A193-B7, not B7) so the quotation shows the
  * full standard designation, and always names the size and coating so no line
- * ships ambiguous about either. Returns "" for families with no agreed
- * format, leaving the existing "family + grade" fallback in the summary
- * untouched.
- *
- * `pitch` (Trading only, e.g. "T16") is folded in right after size --
- * inch-thread items with the same size can carry different pitches, and the
- * quotation should name the exact thread the price applies to.
+ * ships ambiguous about either. Each part is its own comma segment — a blank
+ * one (no thread condition, no length, no pitch) is simply dropped rather
+ * than leaving a stray comma. Returns "" for families with no agreed format,
+ * leaving the existing "family + grade" fallback in the summary untouched.
  */
 function defaultDescription(f: LineForm, gradeLabel: string, coatingLabel: string, pitch?: string | null): string {
   const grade = gradeLabel || f.gradeInput;
   const rawSize = f.sizeLabel || (f.diameterMm ? `M${f.diameterMm}` : "");
   if (!f.productFamily || !grade || !rawSize) return "";
-  const size = formatSizeForDescription(rawSize) + (pitch ? ` (${pitch})` : "");
-  const coatingSuffix = `, ${coatingLabel || "Plain"}`;
+  const size = formatSizeForDescription(rawSize);
+  const coating = coatingLabel || "Plain";
+  const pitchDisplay = pitch ? formatPitchForDescription(rawSize, pitch) : null;
 
   if (f.productFamily === "Bolt") {
-    const thread = f.threadCondition ? `${f.threadCondition} ` : "";
-    const length = f.lengthMm ? `x${f.lengthMm}` : "";
-    return `${f.productFamily}, ${grade}, ${thread}${size}${length}${coatingSuffix}`;
+    const lengthSuffix = f.lengthMm ? `x${f.lengthMm}${f.lengthUnit === "in" ? '"' : "mm"}` : "";
+    const sizeAndLength = `${size}${lengthSuffix}`;
+    return [f.productFamily, grade, f.threadCondition || null, sizeAndLength, pitchDisplay, coating]
+      .filter(Boolean)
+      .join(", ");
   }
   if (f.productFamily === "Nut" || f.productFamily === "Washer") {
-    return `${f.productFamily}, ${grade}, ${size}${coatingSuffix}`;
+    return [f.productFamily, grade, size, pitchDisplay, coating].filter(Boolean).join(", ");
   }
   return "";
 }
@@ -274,7 +318,6 @@ function formToBody(
 
   if (mode === "add" && kind === "component") body.lineKind = "component";
 
-  set("route", f.route);
   set("productFamily", f.productFamily);
   // A blank Description falls back to CBP's standard format rather than
   // staying empty, so the quotation never ships an unlabelled line.
@@ -283,7 +326,10 @@ function formToBody(
   set("threadCondition", f.threadCondition);
   set("sizeLabel", f.sizeLabel);
   set("diameterMm", f.diameterMm, Number);
-  set("lengthMm", f.lengthMm, Number);
+  // The engine only ever works in mm — an inch entry is converted here, once,
+  // right at submission. The description above already used the raw typed
+  // value + its own unit, so this doesn't affect what's printed.
+  set("lengthMm", f.lengthMm, (raw) => (f.lengthUnit === "in" ? Number(raw) * 25.4 : Number(raw)));
   set("developedCutLengthMm", f.developedCutLengthMm, Number);
   // A component's produced quantity is qtyPerSet x the set's qty, worked out
   // server-side at calculation; its own qty column stays unused.
@@ -296,7 +342,15 @@ function formToBody(
   else if (mode === "edit") body.diesTotalCost = null;
   set("weightTolerancePercent", f.weightTolerancePercent, Number);
   set("marginPercent", f.marginPercent, Number);
-  set("tradingItemId", f.tradingItemId);
+  set("pitchType", f.pitchType);
+  // `pitch` is already the resolved value for whichever type is selected —
+  // the user's own typed value for Custom, or the looked-up standard value
+  // for Standard (see saveLine) — so it doubles as both the description
+  // fragment and what gets stored. Switching to a size/type with no known
+  // pitch on edit must still clear any leftover value rather than leave it
+  // stranded.
+  if (pitch) body.pitchValue = pitch;
+  else if (mode === "edit") body.pitchValue = null;
   return body;
 }
 
@@ -316,6 +370,355 @@ function fmt(n: number | null | undefined): string {
 function formatLeadTimeDays(days: number | null): string {
   if (days === null) return "—";
   return days >= 14 && days % 7 === 0 ? `${days / 7} minggu` : `${days} hari`;
+}
+
+/**
+ * Shows which price kind a standalone item is priced at (route merge,
+ * DEC-2026-09-14): a line with only a Production price shows an
+ * informational pill, a line with both lets the owner switch between them
+ * before Finalize — Finalize itself refuses to run while any such line is
+ * still unresolved (Errors.priceKindRequired).
+ */
+function PriceKindControl({
+  line,
+  costingId,
+  canEdit,
+  onSaved,
+}: {
+  line: Line;
+  costingId: string;
+  canEdit: boolean;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  if (line.productionUnitSellingPrice === null && line.tradingUnitSellingPrice === null) {
+    return <span style={{ color: "var(--ink-soft)" }}>—</span>;
+  }
+  if (line.tradingUnitSellingPrice === null) {
+    return <span className="pill neutral">Production</span>;
+  }
+
+  async function choose(kind: "PRODUCTION" | "TRADING") {
+    if (busy || line.chosenPriceKind === kind) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/api/costings/${costingId}/lines/${line.costingLineId}`, {
+        expectedUpdatedAt: line.updatedAt,
+        chosenPriceKind: kind,
+      });
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const options: { kind: "PRODUCTION" | "TRADING"; label: string; price: number | null }[] = [
+    { kind: "PRODUCTION", label: "Production", price: line.productionUnitSellingPrice },
+    { kind: "TRADING", label: "Trading", price: line.tradingUnitSellingPrice },
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {options.map((o) => (
+        <button
+          key={o.kind}
+          type="button"
+          disabled={!canEdit || busy}
+          onClick={() => choose(o.kind)}
+          className={`pill ${line.chosenPriceKind === o.kind ? "success" : "neutral"}`}
+          style={{ cursor: canEdit ? "pointer" : "default", border: 0, textAlign: "left" }}
+          title={canEdit ? `Gunakan harga ${o.label}` : o.label}
+        >
+          {o.label}: {fmt(o.price)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Manual override of a line's quoted unit price, layered on top of whatever
+ * Calculate All (and the Production/Trading pick) produced — for the cases
+ * the guide simply can't price, or a one-off negotiated number. Purely a
+ * quoting decision: saving it never touches the line's updated_at or forces
+ * a recalculation (src/app/api/costings/[id]/lines/[lineId]/route.ts).
+ */
+function UnitPriceOverrideControl({
+  line,
+  costingId,
+  onSaved,
+}: {
+  line: Line;
+  costingId: string;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(line.unitPriceOverride?.toString() ?? "");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const parsed = value.trim() === "" ? null : Number(value);
+      await apiPatch(`/api/costings/${costingId}/lines/${line.costingLineId}`, {
+        expectedUpdatedAt: line.updatedAt,
+        unitPriceOverride: parsed,
+      });
+      setEditing(false);
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <input
+          type="number"
+          min="0"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={line.latestUnitSellingPrice?.toString() ?? "0"}
+          style={{ width: 90 }}
+          autoFocus
+        />
+        <button onClick={save} disabled={busy} className="btn small">
+          OK
+        </button>
+        <button onClick={() => setEditing(false)} disabled={busy} className="btn secondary small">
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => {
+        setValue(line.unitPriceOverride?.toString() ?? "");
+        setEditing(true);
+      }}
+      className="link-btn"
+      style={{ fontFamily: "inherit", color: line.unitPriceOverride !== null ? "var(--amber)" : "inherit" }}
+      title={line.unitPriceOverride !== null ? "Harga di-override manual — klik untuk ubah" : "Klik untuk override harga"}
+    >
+      {fmt(line.latestUnitSellingPrice)}
+      {line.unitPriceOverride !== null && <span className="pill amber" style={{ marginLeft: 4, fontSize: 9 }}>manual</span>}
+    </button>
+  );
+}
+
+/**
+ * Manual trading quote — the fallback price source when auto-matching this
+ * item against the Trading pricelist finds nothing (src/lib/calc/resolvers.ts
+ * resolveTradingItemByAttributes), for a one-off supplier quote instead. The
+ * quoted price is normalized ex-tax and marked up by Margin, entered here
+ * (calculateTradingQuoteLine) rather than as its own top-level field, since
+ * it means nothing without a quote to mark up. Every submission creates a
+ * new trading_quotes row and points the line at it (AUD-010), so this always
+ * reads as "add a quote," never "edit the last one" — Margin, by contrast,
+ * is saved with the rest of the line by the panel's own Save button.
+ */
+function TradingQuoteManualPanel({
+  line,
+  costingId,
+  marginPercent,
+  onMarginPercentChange,
+  onSaved,
+}: {
+  line: Line;
+  costingId: string;
+  marginPercent: string;
+  onMarginPercentChange: (value: string) => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [quotedPrice, setQuotedPrice] = useState("");
+  const [taxBasis, setTaxBasis] = useState<"EXCLUDE_PPN" | "INCLUDE_PPN">("EXCLUDE_PPN");
+  const [ppnRate, setPpnRate] = useState("0.11");
+  const [landedCostConfirmed, setLandedCostConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    setDone(false);
+    try {
+      if (!quotedPrice || Number(quotedPrice) <= 0) throw new Error("Masukkan harga quote.");
+      if (!landedCostConfirmed) throw new Error("Konfirmasi bahwa harga sudah termasuk ongkir dan biaya impor.");
+      await apiPost(`/api/costings/${costingId}/lines/${line.costingLineId}/trading-quote`, {
+        quotedPrice: Number(quotedPrice),
+        taxBasis,
+        ...(taxBasis === "INCLUDE_PPN" ? { ppnRate: Number(ppnRate) } : {}),
+        landedCostConfirmed,
+      });
+      setDone(true);
+      setQuotedPrice("");
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal menyimpan trading quote.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 12, border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 10 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="link-btn"
+        style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}
+      >
+        {open ? "▾" : "▸"} Trading quote manual (opsional)
+        {line.tradingQuoteId && (
+          <span className="pill success" style={{ fontSize: 9 }}>
+            ada quote tersimpan
+          </span>
+        )}
+      </button>
+      <p className="hint" style={{ margin: "4px 0 0" }}>
+        Hanya dipakai kalau item ini <strong>tidak</strong> auto-match ke pricelist Trading. Harga akan
+        dinormalisasi ex-PPN lalu dinaikkan sesuai Margin di bawah.
+      </p>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          <label className="field" style={{ marginBottom: 8 }}>
+            <span className="field-label">Harga quote (dari supplier)</span>
+            <input type="number" min="0" value={quotedPrice} onChange={(e) => setQuotedPrice(e.target.value)} />
+          </label>
+          <label className="field" style={{ marginBottom: 8 }}>
+            <span className="field-label">Margin (0–0.999, e.g. 0.25)</span>
+            <input
+              type="number"
+              step="0.01"
+              value={marginPercent}
+              onChange={(e) => onMarginPercentChange(e.target.value)}
+            />
+          </label>
+          <label className="field" style={{ marginBottom: 8 }}>
+            <span className="field-label">Basis pajak</span>
+            <select value={taxBasis} onChange={(e) => setTaxBasis(e.target.value as typeof taxBasis)}>
+              <option value="EXCLUDE_PPN">Belum termasuk PPN</option>
+              <option value="INCLUDE_PPN">Sudah termasuk PPN</option>
+            </select>
+          </label>
+          {taxBasis === "INCLUDE_PPN" && (
+            <label className="field" style={{ marginBottom: 8 }}>
+              <span className="field-label">Tarif PPN (mis. 0.11)</span>
+              <input type="number" step="0.01" min="0" value={ppnRate} onChange={(e) => setPpnRate(e.target.value)} />
+            </label>
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={landedCostConfirmed}
+              onChange={(e) => setLandedCostConfirmed(e.target.checked)}
+            />
+            Harga sudah termasuk ongkir dan biaya impor
+          </label>
+          {error && (
+            <p className="error-note" role="alert">
+              {error}
+            </p>
+          )}
+          {done && (
+            <p className="pill success" role="status" style={{ display: "inline-block", marginBottom: 8 }}>
+              Trading quote tersimpan.
+            </p>
+          )}
+          <button type="button" onClick={submit} disabled={busy} className="btn small">
+            {busy ? "Menyimpan…" : "Simpan Trading Quote"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatDiscount(type: "PERCENT" | "AMOUNT" | null, value: number | null): string {
+  if (!type || value === null) return "—";
+  return type === "PERCENT" ? `${value}%` : fmt(value);
+}
+
+/**
+ * Per-line discount editor, applied to the line's orderTotal before PPN and
+ * before the costing's own total discount (see quotationDocument.ts). Sits
+ * in the line table rather than the add/edit item panel — a discount is
+ * something you add after seeing a price, not part of describing the item.
+ */
+function LineDiscountControl({
+  line,
+  costingId,
+  onSaved,
+}: {
+  line: Line;
+  costingId: string;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [type, setType] = useState<"PERCENT" | "AMOUNT">(line.discountType ?? "PERCENT");
+  const [value, setValue] = useState(line.discountValue?.toString() ?? "");
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const parsed = value.trim() === "" ? null : Number(value);
+      await apiPatch(`/api/costings/${costingId}/lines/${line.costingLineId}`, {
+        expectedUpdatedAt: line.updatedAt,
+        discountType: parsed === null ? null : type,
+        discountValue: parsed,
+      });
+      setEditing(false);
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => {
+          setType(line.discountType ?? "PERCENT");
+          setValue(line.discountValue?.toString() ?? "");
+          setEditing(true);
+        }}
+        className="link-btn"
+        style={{ fontSize: 12 }}
+      >
+        {formatDiscount(line.discountType, line.discountValue)}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      <select value={type} onChange={(e) => setType(e.target.value as "PERCENT" | "AMOUNT")} style={{ width: 56 }}>
+        <option value="PERCENT">%</option>
+        <option value="AMOUNT">Rp</option>
+      </select>
+      <input
+        type="number"
+        min="0"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        style={{ width: 80 }}
+        placeholder="0"
+      />
+      <button onClick={save} disabled={busy} className="btn small">
+        OK
+      </button>
+      <button onClick={() => setEditing(false)} disabled={busy} className="btn secondary small">
+        ✕
+      </button>
+    </div>
+  );
 }
 
 export function Workspace(props: {
@@ -352,7 +755,13 @@ export function Workspace(props: {
   const [reassignNewOwnerId, setReassignNewOwnerId] = useState("");
   const [reassignReason, setReassignReason] = useState("");
   const [preview, setPreview] = useState<{
+    subtotal: number;
+    lineDiscountTotal: number;
+    totalDiscountAmount: number;
     totalExPpn: number;
+    ppnRate: number;
+    ppnAmount: number;
+    grandTotal: number;
     lines: {
       lineNo: number;
       description: string | null;
@@ -454,13 +863,13 @@ const CUSTOMER_ADD_NEW = "__add_new__";
   }
 
   function openAddSetPanel() {
-    setForm({ ...EMPTY_FORM, route: "CUSTOM" });
+    setForm(EMPTY_FORM);
     setPanel({ mode: "add", kind: "set" });
     setError(null);
   }
 
   function openAddComponentPanel(set: Line) {
-    setForm({ ...EMPTY_FORM, route: "CUSTOM" });
+    setForm(EMPTY_FORM);
     setPanel({ mode: "add", kind: "component", parentLineId: set.costingLineId });
     setError(null);
   }
@@ -478,21 +887,25 @@ const CUSTOMER_ADD_NEW = "__add_new__";
     try {
       const gradeLabel = gradeLabelFor(form.productFamily, form.gradeInput) ?? "";
       const coatingLabel = lookups.coatingLabels[form.coatingCode] ?? form.coatingCode;
-      const tradingItemPitch =
-        (form.productFamily ? lookups.tradingItemsByCategory[form.productFamily] : undefined)?.find(
-          (t) => t.tradingItemId === form.tradingItemId,
-        )?.pitch ?? null;
+      // Custom names whatever the user typed; Standard looks up Bolt/Nut's
+      // known thread pitch for this size (standard_pitches — a physical
+      // constant, not guide data). Neither carries a price effect for
+      // Standard; only Custom's +10% surcharge does (calculate/route.ts).
+      const pitchForDescription =
+        form.pitchType === "CUSTOM"
+          ? form.pitchValue || null
+          : (lookups.standardPitchByFamilySize[form.productFamily]?.[form.sizeLabel] ?? null);
       const kind = panel.kind ?? "item";
       if (panel.mode === "add") {
         await apiPost(`/api/costings/${costing.costingId}/lines`, {
-          ...formToBody(form, "add", gradeLabel, kind, coatingLabel, tradingItemPitch),
+          ...formToBody(form, "add", gradeLabel, kind, coatingLabel, pitchForDescription),
           ...(kind === "component" ? { parentLineId: panel.parentLineId } : {}),
         });
       } else if (panel.mode === "edit" && panel.lineId) {
         const line = lines.find((l) => l.costingLineId === panel.lineId)!;
         await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
           expectedUpdatedAt: line.updatedAt,
-          ...formToBody(form, "edit", gradeLabel, kind, coatingLabel, tradingItemPitch),
+          ...formToBody(form, "edit", gradeLabel, kind, coatingLabel, pitchForDescription),
         });
       }
       setPanel({ mode: "closed" });
@@ -754,7 +1167,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
   const availableThreadConditions = form.productFamily ? (lookups.threadConditionsByFamily[form.productFamily] ?? []) : [];
   const leadTimeScope = resolveTypeLabelForLeadTime(form);
   const availableLeadTimes = leadTimeScope ? (lookups.leadTimeBucketsByFamily[leadTimeScope] ?? []) : [];
-  const availableTradingItems = form.productFamily ? (lookups.tradingItemsByCategory[form.productFamily] ?? []) : [];
+  const editingLine = panel.mode === "edit" && panel.lineId ? lines.find((l) => l.costingLineId === panel.lineId) : null;
 
   return (
     <div className="app-shell" style={{ maxWidth: 1220 }}>
@@ -766,7 +1179,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
 
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             {editingCustomer ? (
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -808,7 +1221,8 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               {costing.quotationNo ?? "no quotation no."} {costing.revisionNo > 0 && `· revision #${costing.revisionNo}`}
             </p>
             <PaymentTermsField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
-            <SignatureField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
+            <MarkupDisplay costing={costing} />
+            <TotalDiscountField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
           </div>
         </div>
         <div className="header-actions">
@@ -825,17 +1239,21 @@ const CUSTOMER_ADD_NEW = "__add_new__";
       </header>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-        <button onClick={loadPreview} className="btn secondary small">
-          Preview
-        </button>
+        {costing.status !== "finalized" && costing.status !== "revised" && (
+          <button onClick={loadPreview} className="btn secondary small">
+            Preview
+          </button>
+        )}
         {lines.length > 0 && (
           <button onClick={openWaText} className="btn secondary small">
             Copy as WA Text
           </button>
         )}
-        <button onClick={loadAudit} className="btn secondary small">
-          Audit Trail
-        </button>
+        {costing.status !== "finalized" && costing.status !== "revised" && (
+          <button onClick={loadAudit} className="btn secondary small">
+            Audit Trail
+          </button>
+        )}
         {(costing.status === "finalized" || costing.status === "revised") && (
           <>
             <button onClick={() => downloadExport("xlsx")} disabled={busy} className="btn secondary small">
@@ -976,12 +1394,13 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             <thead>
               <tr>
                 <th scope="col">#</th>
-                <th scope="col">Route</th>
+                <th scope="col">Harga</th>
                 <th scope="col">Description</th>
                 <th scope="col">Qty</th>
                 <th scope="col">Lead Time</th>
                 <th scope="col">Unit Price</th>
                 <th scope="col">Order Total</th>
+                <th scope="col">Diskon</th>
                 <th scope="col">
                   <span className="sr-only">Actions</span>
                 </th>
@@ -1025,10 +1444,13 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                       <td>
                         {l.lineKind === "set" ? (
                           <span className="pill neutral">SET</span>
-                        ) : l.route ? (
-                          <span className="pill neutral">{l.route}</span>
                         ) : (
-                          <span className="pill danger">belum dipilih</span>
+                          <PriceKindControl
+                            line={l}
+                            costingId={costing.costingId}
+                            canEdit={canEdit && editableStatus}
+                            onSaved={refreshCosting}
+                          />
                         )}
                       </td>
                       <td>
@@ -1055,22 +1477,42 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                       <td className="mono">{l.qty}</td>
                       <td className="mono">
                         {l.lineKind === "set" ? (
-                          (() => {
-                            const distinctLeadTimes = [...new Set(components.map((c) => c.leadTimeDays))];
-                            if (distinctLeadTimes.length === 0) return "—";
-                            if (distinctLeadTimes.length === 1) return formatLeadTimeDays(distinctLeadTimes[0]);
-                            return (
-                              <span className="pill amber" title="Komponen dalam set ini punya lead time berbeda-beda">
-                                campuran
-                              </span>
-                            );
-                          })()
+                          // A set's own lead_time_days is the max of its components' —
+                          // rolled up by Calculate All. Before the first calculation
+                          // there's nothing to roll up yet, so fall back to a live
+                          // preview from whatever the components currently show.
+                          l.leadTimeDays !== null
+                            ? formatLeadTimeDays(l.leadTimeDays)
+                            : (() => {
+                                const componentLeadTimes = components
+                                  .map((c) => c.leadTimeDays)
+                                  .filter((d): d is number => d !== null);
+                                if (componentLeadTimes.length === 0) return "—";
+                                return formatLeadTimeDays(Math.max(...componentLeadTimes));
+                              })()
                         ) : (
                           formatLeadTimeDays(l.leadTimeDays)
                         )}
                       </td>
-                      <td className="mono">{fmt(l.latestUnitSellingPrice)}</td>
+                      <td className="mono">
+                        {canEdit && editableStatus ? (
+                          <UnitPriceOverrideControl line={l} costingId={costing.costingId} onSaved={refreshCosting} />
+                        ) : (
+                          fmt(l.latestUnitSellingPrice)
+                        )}
+                      </td>
                       <td className="mono">{fmt(l.latestOrderTotal)}</td>
+                      <td>
+                        {canEdit && editableStatus ? (
+                          <LineDiscountControl
+                            line={l}
+                            costingId={costing.costingId}
+                            onSaved={refreshCosting}
+                          />
+                        ) : (
+                          formatDiscount(l.discountType, l.discountValue)
+                        )}
+                      </td>
                       <td>{actions(l, `${l.lineKind === "set" ? "set" : "item"} ${displayNo}`)}</td>
                     </tr>
 
@@ -1093,6 +1535,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                           {fmt(c.latestUnitSellingPrice)}
                         </td>
                         <td />
+                        <td />
                         <td>{actions(c, `component ${displayNo}.${ci + 1}`)}</td>
                       </tr>
                     ))}
@@ -1100,7 +1543,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                     {l.lineKind === "set" && (
                       <tr className="component-row">
                         <td />
-                        <td colSpan={7} style={{ paddingLeft: 18 }}>
+                        <td colSpan={8} style={{ paddingLeft: 18 }}>
                           {canEdit && editableStatus && panel.mode === "closed" && (
                             <button onClick={() => openAddComponentPanel(l)} className="btn secondary small">
                               + Add Component
@@ -1119,7 +1562,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               })}
               {lines.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="empty-state">
+                  <td colSpan={9} className="empty-state">
                     Belum ada item.
                   </td>
                 </tr>
@@ -1182,27 +1625,6 @@ const CUSTOMER_ADD_NEW = "__add_new__";
 
           {panelKind !== "set" && (
             <>
-          <label className="field" style={{ marginBottom: 12 }}>
-            <span className="field-label">Route</span>
-            <select
-              value={form.route}
-              onChange={(e) => {
-                const route = e.target.value as LineForm["route"];
-                // Trading is a fixed pricelist item, not made to order -- standard
-                // delivery is 7 days. Custom Production keeps the general 4-minggu
-                // default. Only resets when still at a default, so switching route
-                // back and forth doesn't clobber a lead time the user already picked.
-                const stillDefault = form.leadTimeDays === "7" || form.leadTimeDays === "28";
-                const leadTimeDays = stillDefault ? (route === "TRADING" ? "7" : "28") : form.leadTimeDays;
-                setForm({ ...form, route, leadTimeDays });
-              }}
-            >
-              <option value="">-- pilih --</option>
-              <option value="CUSTOM">Custom Production</option>
-              <option value="TRADING">Trading</option>
-            </select>
-          </label>
-
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Product Family</span>
             <select
@@ -1290,10 +1712,10 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             )}
           </label>
 
-          {form.route === "CUSTOM" && (
-            <>
-              <label className="field" style={{ marginBottom: 12 }}>
-                <span className="field-label">Length (mm) — finished length (Bolt/Stud)</span>
+          {form.productFamily !== "Nut" && form.productFamily !== "Washer" && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Length</span>
+              <div style={{ display: "flex", gap: 6 }}>
                 <input
                   type="number"
                   min="0"
@@ -1303,89 +1725,86 @@ const CUSTOMER_ADD_NEW = "__add_new__";
                     if (v !== "" && Number(v) < 0) return;
                     setForm({ ...form, lengthMm: v });
                   }}
+                  style={{ flex: 1 }}
                 />
-              </label>
-              <label className="field" style={{ marginBottom: 12 }}>
-                <span className="field-label">Lead time</span>
-                {availableLeadTimes.length > 0 ? (
-                  <select value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}>
-                    <option value="">-- pilih --</option>
-                    {availableLeadTimes.map((b) => (
-                      <option key={b.ruleId} value={b.value}>
-                        {b.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="number"
-                    value={form.leadTimeDays}
-                    onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}
-                    placeholder="days"
-                  />
-                )}
-              </label>
-              <label className="field" style={{ marginBottom: 12 }}>
-                <span className="field-label">Dies/Tooling tersedia?</span>
                 <select
-                  value={form.diesOption}
-                  onChange={(e) => setForm({ ...form, diesOption: e.target.value as LineForm["diesOption"] })}
+                  value={form.lengthUnit}
+                  onChange={(e) => setForm({ ...form, lengthUnit: e.target.value as LineForm["lengthUnit"] })}
+                  style={{ width: 70 }}
+                  aria-label="Satuan panjang"
                 >
-                  <option value="yes">Ya</option>
-                  <option value="no_lookup">Tidak</option>
-                  <option value="manual">Lainnya...</option>
+                  <option value="mm">mm</option>
+                  <option value="in">&quot;</option>
                 </select>
-              </label>
-              {form.diesOption === "manual" && (
-                <label className="field" style={{ marginBottom: 12 }}>
-                  <span className="field-label">Dies total cost</span>
-                  <input
-                    type="number"
-                    value={form.diesTotalCost}
-                    onChange={(e) => setForm({ ...form, diesTotalCost: e.target.value })}
-                  />
-                </label>
-              )}
-              <label className="field" style={{ marginBottom: 12 }}>
-                <span className="field-label">
-                  Weight tolerance (0–1, e.g. 0.02 = 2%) — leave blank for guide default ({(lookups.defaultWeightTolerancePercent * 100).toFixed(2)}%)
-                </span>
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  max="1"
-                  value={form.weightTolerancePercent}
-                  onChange={(e) => setForm({ ...form, weightTolerancePercent: e.target.value })}
-                  placeholder={lookups.defaultWeightTolerancePercent.toString()}
-                />
-              </label>
-            </>
-          )}
-
-          {form.route === "TRADING" && (
-            <label className="field" style={{ marginBottom: 12 }}>
-              <span className="field-label">Trading item (pricelist) — leave blank to use a quote instead</span>
-              {availableTradingItems.length > 0 ? (
-                <select value={form.tradingItemId} onChange={(e) => setForm({ ...form, tradingItemId: e.target.value })}>
-                  <option value="">— use trading quote instead —</option>
-                  {availableTradingItems.map((t) => (
-                    <option key={t.tradingItemId} value={t.tradingItemId}>
-                      {t.productName} {t.sizeLabel}
-                      {t.pitch ? ` (${t.pitch})` : ""}
-                      {t.gradeOrSpec ? ` — Grade ${t.gradeOrSpec}` : ""}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={form.tradingItemId}
-                  onChange={(e) => setForm({ ...form, tradingItemId: e.target.value })}
-                  placeholder={form.productFamily ? "no pricelist items in active guide" : "pilih Product Family dulu"}
-                />
-              )}
+              </div>
             </label>
           )}
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Lead time</span>
+            <select value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}>
+              <option value="">-- pilih --</option>
+              {(availableLeadTimes.length > 0 ? availableLeadTimes : GENERIC_LEAD_TIME_OPTIONS).map((b) => (
+                <option key={String(b.value)} value={b.value}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Pitch / Thread</span>
+            <select
+              value={form.pitchType}
+              onChange={(e) => setForm({ ...form, pitchType: e.target.value as LineForm["pitchType"] })}
+            >
+              <option value="STANDARD">Standard</option>
+              <option value="CUSTOM">Custom (+10%)</option>
+            </select>
+          </label>
+          {form.pitchType === "CUSTOM" && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Pitch/Thread custom</span>
+              <input
+                value={form.pitchValue}
+                onChange={(e) => setForm({ ...form, pitchValue: e.target.value })}
+                placeholder="mis. T16"
+              />
+            </label>
+          )}
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Dies/Tooling tersedia?</span>
+            <select
+              value={form.diesOption}
+              onChange={(e) => setForm({ ...form, diesOption: e.target.value as LineForm["diesOption"] })}
+            >
+              <option value="yes">Ya</option>
+              <option value="no_lookup">Tidak</option>
+              <option value="manual">Lainnya...</option>
+            </select>
+          </label>
+          {form.diesOption === "manual" && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Dies total cost</span>
+              <input
+                type="number"
+                value={form.diesTotalCost}
+                onChange={(e) => setForm({ ...form, diesTotalCost: e.target.value })}
+              />
+            </label>
+          )}
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">
+              Weight tolerance (0–1, e.g. 0.02 = 2%) — leave blank for guide default ({(lookups.defaultWeightTolerancePercent * 100).toFixed(2)}%)
+            </span>
+            <input
+              type="number"
+              step="0.001"
+              min="0"
+              max="1"
+              value={form.weightTolerancePercent}
+              onChange={(e) => setForm({ ...form, weightTolerancePercent: e.target.value })}
+              placeholder={lookups.defaultWeightTolerancePercent.toString()}
+            />
+          </label>
 
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Coating code</span>
@@ -1434,16 +1853,17 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             </label>
           )}
 
-          {form.route === "TRADING" && (
-            <label className="field" style={{ marginBottom: 12 }}>
-              <span className="field-label">Margin (0–0.999, e.g. 0.25)</span>
-              <input
-                type="number"
-                step="0.01"
-                value={form.marginPercent}
-                onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
-              />
-            </label>
+          {panel.mode === "edit" && panelKind === "item" && editingLine && (
+            <TradingQuoteManualPanel
+              line={editingLine}
+              costingId={costing.costingId}
+              marginPercent={form.marginPercent}
+              onMarginPercentChange={(v) => setForm({ ...form, marginPercent: v })}
+              onSaved={async () => {
+                await refreshCosting();
+                router.refresh();
+              }}
+            />
           )}
             </>
           )}
@@ -1483,7 +1903,22 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               </div>
             ))}
           </Ticket>
-          <TicketTotal label="Total (excl. PPN)" value={fmt(preview.totalExPpn)} />
+          <div style={{ padding: "0 18px" }}>
+            {(preview.lineDiscountTotal > 0 || preview.totalDiscountAmount > 0) && (
+              <>
+                <TicketLine label="Subtotal" value={fmt(preview.subtotal)} sub />
+                {preview.lineDiscountTotal > 0 && (
+                  <TicketLine label="Diskon per item" value={`-${fmt(preview.lineDiscountTotal)}`} sub />
+                )}
+                {preview.totalDiscountAmount > 0 && (
+                  <TicketLine label="Diskon total" value={`-${fmt(preview.totalDiscountAmount)}`} sub />
+                )}
+              </>
+            )}
+            <TicketLine label="Total sebelum PPN" value={fmt(preview.totalExPpn)} sub />
+            <TicketLine label={`PPN ${(preview.ppnRate * 100).toFixed(0)}%`} value={fmt(preview.ppnAmount)} sub />
+          </div>
+          <TicketTotal label="TOTAL" value={fmt(preview.grandTotal)} />
           <div style={{ background: "var(--ink)", padding: "0 18px 16px" }}>
             <button onClick={() => setShowPreview(false)} className="btn secondary small">
               Close
@@ -1591,6 +2026,24 @@ const CUSTOMER_ADD_NEW = "__add_new__";
  * Showing the inherited value (rather than an empty box) makes clear that
  * blank means "use the account terms", not "no terms".
  */
+/**
+ * Read-only display of the customer account's markup — a segment attribute
+ * set on the Customer record (CustomersAdmin), not something negotiated per
+ * quotation, so unlike Payment Terms there's no override control here.
+ */
+function MarkupDisplay({ costing }: { costing: Costing }) {
+  return (
+    <p style={{ fontSize: 12 }}>
+      Markup:{" "}
+      {costing.accountMarkupPercent !== null ? (
+        `${(costing.accountMarkupPercent * 100).toFixed(2)}%`
+      ) : (
+        <em style={{ color: "var(--ink-soft)" }}>tidak ada</em>
+      )}
+    </p>
+  );
+}
+
 function PaymentTermsField({
   costing,
   canEdit,
@@ -1669,12 +2122,12 @@ function PaymentTermsField({
 }
 
 /**
- * The salesperson whose name appears under "Melayani Sepenuh Hati" on the
- * quotation. Defaults to the costing owner, since the person pricing it
- * usually is the sender — but a quotation often goes out over a colleague's
- * name, so name and jabatan are both set per quotation.
+ * Total discount, applied after every line's own discount and before PPN
+ * (see quotationDocument.ts). Separate from per-line discounts (the table's
+ * Diskon column) — this is the one negotiated on the whole PO, not on one
+ * item.
  */
-function SignatureField({
+function TotalDiscountField({
   costing,
   canEdit,
   onSaved,
@@ -1684,35 +2137,18 @@ function SignatureField({
   onSaved: () => Promise<void> | void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState("");
-  const [title, setTitle] = useState("");
-  const [freeText, setFreeText] = useState(false);
+  const [type, setType] = useState<"PERCENT" | "AMOUNT">(costing.totalDiscountType ?? "PERCENT");
+  const [value, setValue] = useState(costing.totalDiscountValue?.toString() ?? "");
   const [busy, setBusy] = useState(false);
-  const [users, setUsers] = useState<{ userId: string; displayName: string }[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = await apiGet<{ users: { userId: string; displayName: string }[] }>("/api/users");
-        if (!cancelled) setUsers(data.users);
-      } catch {
-        // The picker degrades to the free-text box; tagging must not be blocked
-        // by a directory that failed to load.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function save() {
     setBusy(true);
     try {
+      const parsed = value.trim() === "" ? null : Number(value);
       await apiPatch(`/api/costings/${costing.costingId}`, {
         expectedUpdatedAt: costing.updatedAt,
-        signedByName: name.trim() || null,
-        signedByTitle: title.trim() || null,
+        totalDiscountType: parsed === null ? null : type,
+        totalDiscountValue: parsed,
       });
       setEditing(false);
       await onSaved();
@@ -1722,49 +2158,20 @@ function SignatureField({
   }
 
   if (editing) {
-    // A registered colleague is picked from the list so the name is spelled
-    // identically every time and the Salesperson report groups cleanly;
-    // "Lainnya…" still allows someone without an app account.
-    const known = users.some((u) => u.displayName === name);
     return (
       <p style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <select
-          value={freeText || (name && !known) ? SALESPERSON_OTHER : name}
-          onChange={(e) => {
-            if (e.target.value === SALESPERSON_OTHER) {
-              setFreeText(true);
-              setName("");
-            } else {
-              setFreeText(false);
-              setName(e.target.value);
-            }
-          }}
-          aria-label="Salesperson yang menangani quotation ini"
-          style={{ minWidth: 180 }}
-        >
-          <option value="">— pemilik costing —</option>
-          {users.map((u) => (
-            <option key={u.userId} value={u.displayName}>
-              {u.displayName}
-            </option>
-          ))}
-          <option value={SALESPERSON_OTHER}>Lainnya…</option>
+        <span style={{ fontSize: 12 }}>Diskon total:</span>
+        <select value={type} onChange={(e) => setType(e.target.value as "PERCENT" | "AMOUNT")} style={{ width: 56 }}>
+          <option value="PERCENT">%</option>
+          <option value="AMOUNT">Rp</option>
         </select>
-        {(freeText || (name && !known)) && (
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Nama salesperson"
-            aria-label="Nama salesperson lainnya"
-            style={{ minWidth: 160 }}
-          />
-        )}
         <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Jabatan (opsional)"
-          aria-label="Jabatan salesperson"
-          style={{ minWidth: 150 }}
+          type="number"
+          min="0"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          style={{ width: 100 }}
+          placeholder="0"
         />
         <button onClick={save} disabled={busy} className="btn small">
           Simpan
@@ -1778,21 +2185,12 @@ function SignatureField({
 
   return (
     <p style={{ fontSize: 12 }}>
-      Salesperson:{" "}
-      {costing.signedByName ? (
-        <>
-          {costing.signedByName}
-          {costing.signedByTitle && <span style={{ color: "var(--ink-soft)" }}> · {costing.signedByTitle}</span>}
-        </>
-      ) : (
-        <em style={{ color: "var(--ink-soft)" }}>pemilik costing</em>
-      )}
+      Diskon total: {formatDiscount(costing.totalDiscountType, costing.totalDiscountValue)}
       {canEdit && (
         <button
           onClick={() => {
-            setName(costing.signedByName ?? "");
-            setTitle(costing.signedByTitle ?? "");
-            setFreeText(false);
+            setType(costing.totalDiscountType ?? "PERCENT");
+            setValue(costing.totalDiscountValue?.toString() ?? "");
             setEditing(true);
           }}
           className="link-btn"
@@ -1804,3 +2202,4 @@ function SignatureField({
     </p>
   );
 }
+

@@ -44,6 +44,26 @@ const PatchLineSchema = z.object({
   weightTolerancePercent: z.number().min(0).max(1).nullable().optional(),
   marginPercent: z.number().min(0).max(0.999999).nullable().optional(),
   tradingItemId: z.string().nullable().optional(),
+  /** Line-item discount, applied before PPN and before the header's own total discount. */
+  discountType: z.enum(["PERCENT", "AMOUNT"]).nullable().optional(),
+  discountValue: z.number().min(0).nullable().optional(),
+  /** Pitch/Thread: STANDARD has no price effect; CUSTOM adds +10% (see calculate/route.ts). */
+  pitchType: z.enum(["STANDARD", "CUSTOM"]).nullable().optional(),
+  pitchValue: z.string().max(50).nullable().optional(),
+  /**
+   * The user's pick between an already-computed Production or Trading price
+   * (route merge) — handled separately from every other field below: picking
+   * between two prices Calculate All already produced must not itself force
+   * a recalculation, so it never touches updated_at or the costing's status.
+   */
+  chosenPriceKind: z.enum(["PRODUCTION", "TRADING"]).nullable().optional(),
+  /**
+   * Manual override of the quoted unit price — handled the same way as
+   * chosenPriceKind: it's a quoting decision layered on top of an already
+   * calculated line, not a calculation input, so it never touches updated_at
+   * or forces a recalculation.
+   */
+  unitPriceOverride: z.number().min(0).nullable().optional(),
 });
 
 const EDITABLE_COLUMNS: Record<string, string> = {
@@ -65,6 +85,10 @@ const EDITABLE_COLUMNS: Record<string, string> = {
   weightTolerancePercent: "weight_tolerance_percent",
   marginPercent: "margin_percent",
   tradingItemId: "trading_item_id",
+  discountType: "discount_type",
+  discountValue: "discount_value",
+  pitchType: "pitch_type",
+  pitchValue: "pitch_value",
 };
 
 export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
@@ -86,6 +110,48 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
     throw Errors.validation("Jumlah per set hanya berlaku untuk komponen.");
   }
 
+  if ("chosenPriceKind" in body.data) {
+    const kind = body.data.chosenPriceKind;
+    if (kind !== null) {
+      const { rows: snapRows } = await pool.query(
+        `SELECT 1 FROM line_calculation_snapshots WHERE costing_line_id = $1 AND price_kind = $2 LIMIT 1`,
+        [lineId, kind],
+      );
+      if (snapRows.length === 0) {
+        throw Errors.validation(`Belum ada harga ${kind === "TRADING" ? "Trading" : "Production"} untuk item ini.`);
+      }
+    }
+    await pool.query(`UPDATE costing_lines SET chosen_price_kind = $1 WHERE costing_line_id = $2`, [kind, lineId]);
+    await writeAuditEvent({
+      action: "LINE_PRICE_KIND_CHOSEN",
+      entityType: "costing_lines",
+      entityId: lineId,
+      actorUserId: user.userId,
+      actorRole: primaryAuditRole(user),
+      requestId,
+      beforeJson: { chosenPriceKind: before.chosen_price_kind },
+      afterJson: { chosenPriceKind: kind },
+    });
+  }
+
+  if ("unitPriceOverride" in body.data) {
+    const override = body.data.unitPriceOverride;
+    await pool.query(`UPDATE costing_lines SET unit_price_override = $1 WHERE costing_line_id = $2`, [
+      override,
+      lineId,
+    ]);
+    await writeAuditEvent({
+      action: "LINE_PRICE_OVERRIDDEN",
+      entityType: "costing_lines",
+      entityId: lineId,
+      actorUserId: user.userId,
+      actorRole: primaryAuditRole(user),
+      requestId,
+      beforeJson: { unitPriceOverride: before.unit_price_override },
+      afterJson: { unitPriceOverride: override },
+    });
+  }
+
   const changedFields: string[] = [];
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -98,7 +164,8 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
   }
 
   if (setClauses.length === 0) {
-    return NextResponse.json(serializeCostingLine(before, false));
+    const current = await loadLine(id, lineId);
+    return NextResponse.json(serializeCostingLine(current, false));
   }
 
   const after = await withTransaction(async (client) => {

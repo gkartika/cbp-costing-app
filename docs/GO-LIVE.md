@@ -242,12 +242,15 @@ revert that breaks something else is caught before it lands.
   all. Confirmed as real missing source-spreadsheet rows, not a resolution
   bug — deferred, fix later.
 - **Trading items' `weight_kg`/`market_min`/`market_max`/`price_per_kg`/
-  `pitch`/`width_flat`/`thickness`/`material`/`unit_system`/`currency`
+  `width_flat`/`thickness`/`material`/`unit_system`/`currency`
   columns were dropped** (migration `1700000028000`) — audited 2026-09-12,
   none were ever read by any calc, API, or UI code; Trading always prices
-  off `trading_price_tiers.unit_price` alone. `purchase_price` and
-  `purchase_price_ex_tax` were kept as Super Admin's internal cost
-  reference, even though the engine doesn't price off them either.
+  off `trading_price_tiers.unit_price` alone. `pitch` was re-added shortly
+  after (migration `1700000029000`) once it became a real reference field
+  for the pricelist matrix and line descriptions. `purchase_price` and
+  `purchase_price_ex_tax` were kept at the time as Super Admin's internal
+  cost reference, but no admin screen ever surfaced them either — dropped
+  for good in migration `1700000035000` (2026-09-16).
 - **Trading Price Tiers now has a matrix editor** (Master Data → Trading
   Price Tiers), replacing the one-row-at-a-time form for that table only:
   pick a category/product/grade, and every size x quantity-tier combination

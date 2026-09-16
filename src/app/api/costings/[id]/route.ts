@@ -34,8 +34,10 @@ async function assertAuthorized(
 }
 
 async function loadCosting(costingId: string): Promise<CostingHeaderRow> {
-  const { rows } = await pool.query<CostingHeaderRow & { account_payment_terms: string | null }>(
-    `SELECT ch.*, c.payment_terms AS account_payment_terms
+  const { rows } = await pool.query<
+    CostingHeaderRow & { account_payment_terms: string | null; account_markup_percent: string | null }
+  >(
+    `SELECT ch.*, c.payment_terms AS account_payment_terms, c.markup_percent AS account_markup_percent
      FROM costing_headers ch LEFT JOIN customers c ON c.customer_id = ch.customer_id
      WHERE ch.costing_id = $1 AND ch.deleted_at IS NULL`,
     [costingId],
@@ -50,34 +52,62 @@ export const GET = apiHandler(async (_req: NextRequest, ctx) => {
   const { id } = await ctx.params;
   const costing = await loadCosting(id);
 
+  // Two price kinds can now exist per line (route merge): Production is
+  // always attempted, Trading only when the line's attributes auto-match a
+  // pricelist item. Both are surfaced so the Workspace can show them
+  // side by side; "chosen"/"latest" is whichever price_kind the line has
+  // settled on (chosen_price_kind, defaulting to Production), which is what
+  // every other read path (dashboard, reports, quotation) also uses.
   const { rows: lineRows } = await pool.query<
     CostingLineRow & {
-      has_current_snapshot: boolean;
-      unit_selling_price: string | null;
-      order_total: string | null;
+      chosen_has_current_snapshot: boolean;
+      chosen_unit_selling_price: string | null;
+      chosen_order_total: string | null;
+      production_unit_selling_price: string | null;
+      production_order_total: string | null;
+      trading_unit_selling_price: string | null;
+      trading_order_total: string | null;
     }
   >(
     `SELECT cl.*,
-            latest.has_current_snapshot,
-            latest.unit_selling_price,
-            latest.order_total
+            (cl.unit_price_override IS NOT NULL OR chosen.has_current_snapshot) AS chosen_has_current_snapshot,
+            COALESCE(cl.unit_price_override, chosen.unit_selling_price) AS chosen_unit_selling_price,
+            CASE WHEN cl.unit_price_override IS NOT NULL THEN cl.unit_price_override * cl.qty ELSE chosen.order_total END
+              AS chosen_order_total,
+            production.unit_selling_price AS production_unit_selling_price,
+            production.order_total AS production_order_total,
+            trading.unit_selling_price AS trading_unit_selling_price,
+            trading.order_total AS trading_order_total
      FROM costing_lines cl
      LEFT JOIN LATERAL (
        SELECT (s.created_at >= cl.updated_at) AS has_current_snapshot, s.unit_selling_price, s.order_total
        FROM line_calculation_snapshots s
-       WHERE s.costing_line_id = cl.costing_line_id
-       ORDER BY s.created_at DESC
-       LIMIT 1
-     ) latest ON true
+       WHERE s.costing_line_id = cl.costing_line_id AND s.price_kind = COALESCE(cl.chosen_price_kind, 'PRODUCTION')
+       ORDER BY s.created_at DESC LIMIT 1
+     ) chosen ON true
+     LEFT JOIN LATERAL (
+       SELECT s.unit_selling_price, s.order_total FROM line_calculation_snapshots s
+       WHERE s.costing_line_id = cl.costing_line_id AND s.price_kind = 'PRODUCTION'
+       ORDER BY s.created_at DESC LIMIT 1
+     ) production ON true
+     LEFT JOIN LATERAL (
+       SELECT s.unit_selling_price, s.order_total FROM line_calculation_snapshots s
+       WHERE s.costing_line_id = cl.costing_line_id AND s.price_kind = 'TRADING'
+       ORDER BY s.created_at DESC LIMIT 1
+     ) trading ON true
      WHERE cl.costing_id = $1 AND cl.deleted_at IS NULL
      ORDER BY cl.line_no`,
     [id],
   );
 
   const lines = lineRows.map((r) => ({
-    ...serializeCostingLine(r, r.has_current_snapshot ?? false),
-    latestUnitSellingPrice: r.unit_selling_price !== null ? Number(r.unit_selling_price) : null,
-    latestOrderTotal: r.order_total !== null ? Number(r.order_total) : null,
+    ...serializeCostingLine(r, r.chosen_has_current_snapshot ?? false),
+    latestUnitSellingPrice: r.chosen_unit_selling_price !== null ? Number(r.chosen_unit_selling_price) : null,
+    latestOrderTotal: r.chosen_order_total !== null ? Number(r.chosen_order_total) : null,
+    productionUnitSellingPrice: r.production_unit_selling_price !== null ? Number(r.production_unit_selling_price) : null,
+    productionOrderTotal: r.production_order_total !== null ? Number(r.production_order_total) : null,
+    tradingUnitSellingPrice: r.trading_unit_selling_price !== null ? Number(r.trading_unit_selling_price) : null,
+    tradingOrderTotal: r.trading_order_total !== null ? Number(r.trading_order_total) : null,
   }));
 
   return NextResponse.json({ ...serializeCosting(costing, user.userId), lines });
@@ -95,6 +125,9 @@ const PatchCostingSchema = z.object({
   /** Who signs the quotation; null falls back to the owner's display name. */
   signedByName: z.string().max(200).nullable().optional(),
   signedByTitle: z.string().max(200).nullable().optional(),
+  /** Total discount applied after all line discounts, before PPN. */
+  totalDiscountType: z.enum(["PERCENT", "AMOUNT"]).nullable().optional(),
+  totalDiscountValue: z.number().min(0).nullable().optional(),
 });
 
 export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
@@ -127,6 +160,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
     "signedByName" in body.data ? (body.data.signedByName?.trim() || null) : before.signed_by_name;
   const nextSignedTitle =
     "signedByTitle" in body.data ? (body.data.signedByTitle?.trim() || null) : before.signed_by_title;
+  const beforeTotalDiscountValue = before.total_discount_value !== null ? Number(before.total_discount_value) : null;
+  const nextTotalDiscountType =
+    "totalDiscountType" in body.data ? body.data.totalDiscountType ?? null : before.total_discount_type;
+  const nextTotalDiscountValue =
+    "totalDiscountValue" in body.data ? body.data.totalDiscountValue ?? null : beforeTotalDiscountValue;
 
   const after = await withTransaction(async (client) => {
     // Resolving to a real customer_id here (not just renaming the display
@@ -170,6 +208,8 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
     if (nextPaymentOverride !== before.payment_terms_override) changedFields.push("paymentTermsOverride");
     if (nextSignedName !== before.signed_by_name) changedFields.push("signedByName");
     if (nextSignedTitle !== before.signed_by_title) changedFields.push("signedByTitle");
+    if (nextTotalDiscountType !== before.total_discount_type) changedFields.push("totalDiscountType");
+    if (nextTotalDiscountValue !== beforeTotalDiscountValue) changedFields.push("totalDiscountValue");
 
     const { rows, rowCount } = await client.query<CostingHeaderRow>(
       `UPDATE costing_headers
@@ -180,8 +220,10 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
              payment_terms_override = $5,
              signed_by_name = $6,
              signed_by_title = $7,
+             total_discount_type = $8,
+             total_discount_value = $9,
              updated_at = now()
-       WHERE costing_id = $8 AND updated_at = $9
+       WHERE costing_id = $10 AND updated_at = $11
        RETURNING *`,
       [
         nextCustomerId,
@@ -191,6 +233,8 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx) => {
         nextPaymentOverride,
         nextSignedName,
         nextSignedTitle,
+        nextTotalDiscountType,
+        nextTotalDiscountValue,
         id,
         before.updated_at,
       ],

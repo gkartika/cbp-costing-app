@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { generateId } from "@/lib/ids";
+import { Errors } from "@/lib/errors";
 import { TAB_SPECS, type TabSpec } from "./importSchema";
 
 export type PendingPatch = {
@@ -69,7 +70,7 @@ export async function cloneForwardWithPatches(
     for (const patch of tablePatches) {
       if (patch.operation !== "create") continue;
       if (seenSourceKeys.has(patch.sourceKey)) {
-        throw new Error(`${spec.tabName}: "${patch.sourceKey}" already exists — use update, not create`);
+        throw Errors.guideDuplicateKey(`${spec.tabName}: "${patch.sourceKey}" already exists — use update, not create`);
       }
       const fieldValues = resolveFieldValues(spec, null, patch, oldIdToSourceKeyByTable, sourceKeyToNewIdByTable);
       const newId = await insertClonedRow(client, spec, newGuideVersionId, patch.sourceKey, fieldValues);
@@ -236,7 +237,7 @@ async function cloneAppConfigAndSimulationCases(
   for (const patch of simPatches) {
     if (patch.operation !== "create") continue;
     if (seenSimSourceKeys.has(patch.sourceKey)) {
-      throw new Error(`Simulation_Cases: "${patch.sourceKey}" already exists — use update, not create`);
+      throw Errors.guideDuplicateKey(`Simulation_Cases: "${patch.sourceKey}" already exists — use update, not create`);
     }
     const fields = (patch.fields ?? {}) as Record<string, unknown>;
     await client.query(

@@ -59,6 +59,9 @@ const CreateLineSchema = z.object({
   weightTolerancePercent: z.number().min(0).max(1).optional(),
   marginPercent: z.number().min(0).max(0.999999).optional(),
   tradingItemId: z.string().optional(),
+  /** Pitch/Thread: STANDARD has no price effect; CUSTOM adds +10% (see calculate/route.ts). */
+  pitchType: z.enum(["STANDARD", "CUSTOM"]).optional(),
+  pitchValue: z.string().max(50).optional(),
 });
 
 export const POST = apiHandler(async (req: NextRequest, ctx) => {
@@ -108,8 +111,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
          (costing_line_id, costing_id, line_no, line_kind, parent_line_id, qty_per_set,
           route, product_family, description, grade_input, thread_condition,
           size_label, diameter_mm, length_mm, developed_cut_length_mm, qty, lead_time_days, coating_code,
-          dies_option, dies_total_cost, weight_tolerance_percent, margin_percent, trading_item_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+          dies_option, dies_total_cost, weight_tolerance_percent, margin_percent, trading_item_id,
+          pitch_type, pitch_value)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
        RETURNING *`,
       [
         lineId,
@@ -135,6 +139,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
         body.data.weightTolerancePercent ?? null,
         body.data.marginPercent ?? null,
         body.data.tradingItemId ?? null,
+        body.data.pitchType ?? null,
+        body.data.pitchValue ?? null,
       ],
     );
 

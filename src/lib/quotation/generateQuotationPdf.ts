@@ -89,11 +89,12 @@ export async function generateQuotationPdf(doc: QuotationDocument): Promise<Buff
     y = drawItemRow(pdf, y, line, i % 2 === 1);
   });
 
-  if (y + 40 > PAGE.height - MARGIN - 60) {
+  const totalsRowCount = 2 + (doc.lineDiscountTotal > 0 ? 1 : 0) + (doc.totalDiscountAmount > 0 ? 1 : 0);
+  if (y + 24 * totalsRowCount + 20 > PAGE.height - MARGIN - 60) {
     pdf.addPage();
     y = MARGIN;
   }
-  y = drawTotal(pdf, y, doc.totalExPpn);
+  y = drawTotals(pdf, y, doc);
   y = drawTerms(pdf, y, doc);
   drawSignatureAndFooter(pdf, y, doc);
 
@@ -209,16 +210,40 @@ function drawItemRow(
   return y + rowH;
 }
 
-function drawTotal(pdf: PDFKit.PDFDocument, y: number, totalExPpn: number): number {
-  y += 6;
-  const rowH = 24;
+function drawTotalRow(
+  pdf: PDFKit.PDFDocument,
+  y: number,
+  label: string,
+  value: number,
+  opts: { bold?: boolean; highlight?: boolean } = {},
+): number {
+  const rowH = 20;
   const labelW = COL.no.w + COL.desc.w + COL.qty.w + COL.price.w;
-  pdf.font("Helvetica-Bold").fontSize(10).fillColor(PURPLE);
-  pdf.text("TOTAL (belum termasuk PPN)", MARGIN, y + 7, { width: labelW - 8, align: "right" });
-  pdf.rect(COL.total.x, y, COL.total.w, rowH).fill(YELLOW);
-  pdf.font("Helvetica-Bold").fontSize(11).fillColor(PURPLE);
-  pdf.text(money(totalExPpn), COL.total.x, y + 7, { width: COL.total.w - 4, align: "right" });
-  return y + rowH + 20;
+  const font = opts.bold ? "Helvetica-Bold" : "Helvetica";
+  pdf.font(font).fontSize(opts.bold ? 10 : 9).fillColor(opts.highlight ? PURPLE : INK);
+  pdf.text(label, MARGIN, y + 5, { width: labelW - 8, align: "right" });
+  if (opts.highlight) pdf.rect(COL.total.x, y, COL.total.w, rowH).fill(YELLOW);
+  pdf.font(font).fontSize(opts.bold ? 11 : 9).fillColor(PURPLE);
+  pdf.text(money(value), COL.total.x, y + 5, { width: COL.total.w - 4, align: "right" });
+  return y + rowH;
+}
+
+function drawTotals(pdf: PDFKit.PDFDocument, y: number, doc: QuotationDocument): number {
+  y += 6;
+  const showDiscountBreakdown = doc.lineDiscountTotal > 0 || doc.totalDiscountAmount > 0;
+
+  if (showDiscountBreakdown) {
+    y = drawTotalRow(pdf, y, "Subtotal", doc.subtotal);
+    if (doc.lineDiscountTotal > 0) y = drawTotalRow(pdf, y, "Diskon per item", -doc.lineDiscountTotal);
+    if (doc.totalDiscountAmount > 0) y = drawTotalRow(pdf, y, "Diskon total", -doc.totalDiscountAmount);
+    y = drawTotalRow(pdf, y, "Total sebelum PPN", doc.totalExPpn);
+  } else {
+    y = drawTotalRow(pdf, y, "Total sebelum PPN", doc.totalExPpn);
+  }
+  y = drawTotalRow(pdf, y, `PPN ${(doc.ppnRate * 100).toFixed(0)}%`, doc.ppnAmount);
+  y += 4;
+  y = drawTotalRow(pdf, y, "TOTAL", doc.grandTotal, { bold: true, highlight: true });
+  return y + 20;
 }
 
 function drawTerms(pdf: PDFKit.PDFDocument, y: number, doc: QuotationDocument): number {

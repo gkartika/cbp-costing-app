@@ -110,7 +110,7 @@ describe("AT-STATE-003: a finalized costing is locked; Create Revision stays ava
       body: { expectedUpdatedAt: calculated.json.updatedAt },
     });
     expect(finalized.status).toBe(200);
-    expect(finalized.json.quotationNo).toMatch(/^CBP-Q-\d{4}-\d{5}$/);
+    expect(finalized.json.quotationNo).toMatch(/^CBP-Q-\d{2}-\d{5}$/);
 
     const lineNow = await apiFetch(`/api/costings/${costingId}/lines`, { cookie });
     const targetLine = (lineNow.json.lines as { costingLineId: string; updatedAt: string }[]).find(

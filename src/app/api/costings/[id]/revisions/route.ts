@@ -59,8 +59,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
         `INSERT INTO costing_lines
            (costing_line_id, costing_id, line_no, route, product_family, description, grade_input,
             size_label, diameter_mm, length_mm, developed_cut_length_mm, qty, lead_time_days, coating_code,
-            dies_option, dies_total_cost, weight_tolerance_percent, margin_percent, trading_item_id, thread_condition)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+            dies_option, dies_total_cost, weight_tolerance_percent, margin_percent, trading_item_id, thread_condition,
+            discount_type, discount_value, pitch_type, pitch_value)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                 $21, $22, $23, $24)`,
         [
           generateId("line"),
           newCostingId,
@@ -82,6 +84,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
           line.margin_percent,
           line.trading_item_id,
           line.thread_condition,
+          line.discount_type,
+          line.discount_value,
+          line.pitch_type,
+          line.pitch_value,
         ],
       );
     }

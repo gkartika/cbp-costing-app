@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/http/requestContext";
 import { getActivePublishedGuideVersionId } from "@/lib/guide/activeGuideVersion";
 import { loadGuideContext } from "@/lib/calc/loadGuideContext";
 import { getConfigNumber } from "@/lib/calc/appConfig";
+import { pool } from "@/lib/db";
 
 /**
  * Lead time shown the way CBP quotes it: whole weeks as "N minggu", anything
@@ -24,6 +25,18 @@ function formatLeadTime(days: number): string {
 export const GET = apiHandler(async () => {
   await requireUser();
 
+  // Physical/engineering constant, not guide-versioned data (see the
+  // standard_pitches migration) — loaded regardless of whether a guide is
+  // published, since it doesn't come from one.
+  const { rows: pitchRows } = await pool.query<{ product_family: string; size_label: string; pitch_value: string }>(
+    `SELECT product_family, size_label, pitch_value FROM standard_pitches`,
+  );
+  const standardPitchByFamilySize: Record<string, Record<string, string>> = {};
+  for (const row of pitchRows) {
+    const familyMap = standardPitchByFamilySize[row.product_family] ?? (standardPitchByFamilySize[row.product_family] = {});
+    familyMap[row.size_label] = row.pitch_value;
+  }
+
   const guideVersionId = await getActivePublishedGuideVersionId();
   if (!guideVersionId) {
     return NextResponse.json({
@@ -36,8 +49,8 @@ export const GET = apiHandler(async () => {
       coatingCodes: [],
       coatingLabels: {},
       leadTimeBucketsByFamily: {},
-      tradingItemsByCategory: {},
       threadConditionsByFamily: {},
+      standardPitchByFamilySize,
       defaultWeightTolerancePercent: 0,
     });
   }
@@ -111,28 +124,6 @@ export const GET = apiHandler(async () => {
   }
   Object.values(leadTimeBucketsByFamily).forEach((list) => list.sort((a, b) => a.value - b.value));
 
-  // gradeOrSpec/productName ride along so the picker can show which specific
-  // item a size resolves to -- most Trading sizes are shared by several
-  // grades (e.g. Nut M12 across 2H/4.6/8.8/B8/B8M/F10), each priced
-  // differently, and size alone can't tell them apart.
-  const tradingItemsByCategory: Record<
-    string,
-    { tradingItemId: string; sizeLabel: string; gradeOrSpec: string | null; productName: string; pitch: string | null }[]
-  > = {};
-  for (const item of ctx.tradingItems) {
-    const list = tradingItemsByCategory[item.productCategory] ?? (tradingItemsByCategory[item.productCategory] = []);
-    list.push({
-      tradingItemId: item.tradingItemId,
-      sizeLabel: item.sizeLabel,
-      gradeOrSpec: item.gradeOrSpec,
-      productName: item.productName,
-      pitch: item.pitch,
-    });
-  }
-  Object.values(tradingItemsByCategory).forEach((list) =>
-    list.sort((a, b) => a.sizeLabel.localeCompare(b.sizeLabel, undefined, { numeric: true }) || (a.gradeOrSpec ?? "").localeCompare(b.gradeOrSpec ?? "")),
-  );
-
   // Thread condition is only a real choice where the guide actually prices two
   // or more of them at the same grade+size — today that is Bolt (HT vs FT).
   // Nut carries a single placeholder "NA" and Stud/Anchor a single "FT", which
@@ -161,8 +152,8 @@ export const GET = apiHandler(async () => {
     coatingCodes,
     coatingLabels,
     leadTimeBucketsByFamily,
-    tradingItemsByCategory,
     threadConditionsByFamily,
+    standardPitchByFamilySize,
     defaultWeightTolerancePercent: getConfigNumber(ctx, "CUSTOM_WEIGHT_TOLERANCE"),
   });
 });

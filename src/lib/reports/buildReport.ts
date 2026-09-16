@@ -114,11 +114,14 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
      FROM costing_headers ch
      LEFT JOIN users u ON u.user_id = ch.owner_user_id
      LEFT JOIN LATERAL (
-       SELECT SUM(latest.order_total) AS total_nominal
+       SELECT SUM(
+         CASE WHEN cl.unit_price_override IS NOT NULL THEN cl.unit_price_override * cl.qty ELSE latest.order_total END
+       ) AS total_nominal
        FROM costing_lines cl
        JOIN LATERAL (
          SELECT s.order_total FROM line_calculation_snapshots s
          WHERE s.costing_line_id = cl.costing_line_id
+           AND s.price_kind = COALESCE(cl.chosen_price_kind, 'PRODUCTION')
          ORDER BY s.created_at DESC LIMIT 1
        ) latest ON true
        WHERE cl.costing_id = ch.costing_id AND cl.deleted_at IS NULL
@@ -146,7 +149,9 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
   }>(
     `SELECT ch.costing_id, ch.quotation_no, ch.customer_name_snapshot,
             cl.line_no, cl.description, cl.product_family, cl.grade_input, cl.size_label, cl.qty,
-            latest.unit_selling_price, latest.order_total
+            COALESCE(cl.unit_price_override, latest.unit_selling_price) AS unit_selling_price,
+            CASE WHEN cl.unit_price_override IS NOT NULL THEN cl.unit_price_override * cl.qty ELSE latest.order_total END
+              AS order_total
      FROM costing_headers ch
      LEFT JOIN users u ON u.user_id = ch.owner_user_id
      JOIN costing_lines cl ON cl.costing_id = ch.costing_id AND cl.deleted_at IS NULL
@@ -158,6 +163,7 @@ export async function buildReport(filters: ReportFilters): Promise<ReportResult>
      LEFT JOIN LATERAL (
        SELECT s.unit_selling_price, s.order_total FROM line_calculation_snapshots s
        WHERE s.costing_line_id = cl.costing_line_id
+         AND s.price_kind = COALESCE(cl.chosen_price_kind, 'PRODUCTION')
        ORDER BY s.created_at DESC LIMIT 1
      ) latest ON true
      WHERE ${clause}

@@ -190,13 +190,13 @@ export function MasterDataAdmin() {
     setError(null);
     setReport(null);
     try {
-      const { ok, data } = await api<{ published: boolean; report?: ValidationReport }>(
+      const { ok, data } = await api<{ published: boolean; report?: ValidationReport; error?: { message?: string } }>(
         `/api/master-data/${selectedTable}/publish`,
         { method: "POST" },
       );
       if (!ok || !data.published) {
         setReport(data.report ?? null);
-        throw new Error("Publikasi gagal — lihat laporan validasi di bawah.");
+        throw new Error(data.report ? "Publikasi gagal — lihat laporan validasi di bawah." : (data.error?.message ?? "Publikasi gagal."));
       }
       await loadTableData(selectedTable);
     } catch (e) {
@@ -245,7 +245,7 @@ export function MasterDataAdmin() {
 
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>Master Data</h1>
             <p>Super Admin Only &middot; edit one table, review, publish</p>

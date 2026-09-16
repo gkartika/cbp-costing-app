@@ -4,8 +4,11 @@
   --surface-alt: #e3e6de;
   --ink: #1b2126;
   --ink-soft: #57636b;
-  --steel: #2f4c5a;
-  --steel-light: #6c8b96;
+  /* CBP brand palette (same hex as the PDF/XLSX exports — generateQuotationPdf.ts). */
+  --brand-purple: #552c59;
+  --brand-yellow: #fdee0a;
+  --steel: var(--brand-purple);
+  --steel-light: #8a5f8e;
   --amber: #d98e2b;
   --danger: #b23a32;
   --danger-bg: #fbeceb;
@@ -28,8 +31,8 @@
     --surface-alt: #242c2f;
     --ink: #e7ebe4;
     --ink-soft: #9aa6ab;
-    --steel: #6c8b96;
-    --steel-light: #8fa8b1;
+    --steel: #a878ac;
+    --steel-light: #c8a5cb;
     --border: #33393b;
     --danger-bg: #3a2422;
     --success-bg: #1e2f26;
@@ -97,8 +100,9 @@ h3 {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 2px solid var(--ink);
+  padding-bottom: 14px;
+  border-bottom: 4px solid var(--brand-purple);
+  box-shadow: 0 4px 0 -2px var(--brand-yellow);
   gap: 16px;
   flex-wrap: wrap;
 }
@@ -110,18 +114,10 @@ h3 {
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 4px;
-  background: var(--steel);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-family: var(--font-heading), "Space Grotesk", sans-serif;
-  font-weight: 700;
-  font-size: 15px;
+  height: 32px;
+  width: auto;
   flex-shrink: 0;
+  display: block;
 }
 
 .brand-text h1 {

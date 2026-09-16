@@ -55,7 +55,6 @@ export const Errors = {
     new AppError("VALIDATION_ERROR", 400, userMessage, message),
 
   // 10_VALIDATION_RULES — calculation engine (VAL-003..021)
-  routeRequired: () => new AppError("ROUTE_REQUIRED", 400, "Pilih Trading atau Custom Production."),
   qtyInvalid: () => new AppError("QTY_INVALID", 400, "Quantity minimal 1."),
   guideNotActive: () => new AppError("GUIDE_NOT_ACTIVE", 409, "Panduan harga belum aktif."),
   profileNotFound: () => new AppError("PROFILE_NOT_FOUND", 422, "Profile untuk grade ini belum tersedia."),
@@ -90,6 +89,12 @@ export const Errors = {
     new AppError("ANCHOR_DEVELOPED_LENGTH_REQUIRED", 400, "Masukkan panjang bahan sebelum ditekuk."),
   recalculationRequired: () =>
     new AppError("RECALCULATION_REQUIRED", 409, "Hitung ulang semua item sebelum finalisasi."),
+  priceKindRequired: () =>
+    new AppError(
+      "PRICE_KIND_REQUIRED",
+      409,
+      "Pilih harga Production atau Trading untuk setiap item yang punya keduanya, sebelum finalisasi.",
+    ),
   quotationNotFinal: () =>
     new AppError("QUOTATION_NOT_FINAL", 409, "Quotation harus difinalisasi sebelum diekspor."),
 

@@ -132,7 +132,7 @@ export function GuideAdmin({ initialGuides }: { initialGuides: Guide[] }) {
 
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>Guide Version Management</h1>
             <p>Super Admin Only</p>

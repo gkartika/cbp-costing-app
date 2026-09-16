@@ -12,13 +12,15 @@ import { effectiveComponentQty, sumSet, type PricedComponent } from "@/lib/costi
 import { loadGuideContext } from "@/lib/calc/loadGuideContext";
 import { calculateCustomLine, type CustomLineInput } from "@/lib/calc/customPipeline";
 import { calculateTradingPricelistLine, calculateTradingQuoteLine } from "@/lib/calc/tradingPipeline";
+import { resolveTradingItemByAttributes } from "@/lib/calc/resolvers";
 import { getConfigNumber } from "@/lib/calc/appConfig";
 import { ceilingToIncrement } from "@/lib/calc/rounding";
 import type { ResolvedRuleRef } from "@/lib/calc/types";
-import { Errors, toAppError } from "@/lib/errors";
+import { AppError, Errors, toAppError } from "@/lib/errors";
 
 type LineCalcOutcome = {
   lineId: string;
+  priceKind: "PRODUCTION" | "TRADING";
   /** The quantity orderTotal was computed from — needed to re-derive orderTotal after a post-hoc price adjustment (customer markup) without re-deriving it from the line row. */
   qty: number;
   profileResolved: string | null;
@@ -32,6 +34,8 @@ type LineCalcOutcome = {
   orderTotal: number;
   resolvedRuleRefs: ResolvedRuleRef[];
   inputSnapshot: Record<string, unknown>;
+  /** Set only for a set's own outcome — the set's lead_time_days gets updated to this (the longest of its components). */
+  rollUpLeadTimeDays?: number | null;
 };
 
 export const POST = apiHandler(async (req: NextRequest, ctx) => {
@@ -88,14 +92,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
     else componentsByParent.set(line.parent_line_id, [line]);
   }
 
+  // Only a Production outcome is ever needed to roll a set up (see
+  // priceLineOutcomes) — components never carry a Trading price.
   const pricedById = new Map<string, LineCalcOutcome>();
   for (const line of lines) {
     if (line.line_kind === "set") continue;
     try {
       const setQty = line.parent_line_id ? (lines.find((l) => l.costing_line_id === line.parent_line_id)?.qty ?? 0) : 0;
-      const outcome = await calculateOneLine(guideCtx, line, setQty, customerMarkup);
-      pricedById.set(line.costing_line_id, outcome);
-      outcomes.push(outcome);
+      const lineOutcomes = await calculateOneLine(guideCtx, line, setQty, customerMarkup);
+      outcomes.push(...lineOutcomes);
+      const production = lineOutcomes.find((o) => o.priceKind === "PRODUCTION");
+      if (production) pricedById.set(line.costing_line_id, production);
     } catch (err) {
       const appError = toAppError(err);
       lineErrors.push({ lineId: line.costing_line_id, code: appError.code, message: appError.userMessage });
@@ -128,8 +135,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
         `INSERT INTO line_calculation_snapshots
            (snapshot_id, costing_line_id, guide_version_id, input_snapshot_json, resolved_rule_ids,
             raw_weight_per_item_kg, costing_weight_per_item_kg, base_price_per_item, coating_price_per_item,
-            dies_price_per_item, unit_price_before_rounding, unit_selling_price, order_total, result_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+            dies_price_per_item, unit_price_before_rounding, unit_selling_price, order_total, result_hash, price_kind)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           generateId("snap"),
           outcome.lineId,
@@ -145,12 +152,39 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
           outcome.unitSellingPrice,
           outcome.orderTotal,
           resultHash,
+          outcome.priceKind,
         ],
       );
       if (outcome.profileResolved) {
         await client.query(`UPDATE costing_lines SET profile_resolved = $1 WHERE costing_line_id = $2`, [
           outcome.profileResolved,
           outcome.lineId,
+        ]);
+      }
+      if (outcome.rollUpLeadTimeDays !== undefined) {
+        await client.query(`UPDATE costing_lines SET lead_time_days = $1 WHERE costing_line_id = $2`, [
+          outcome.rollUpLeadTimeDays,
+          outcome.lineId,
+        ]);
+      }
+    }
+
+    // A line with only one price kind needs no user choice — resolve it
+    // automatically so every other read path can just trust
+    // chosen_price_kind. A line with both is left alone: a prior pick
+    // survives recalculation, and no pick yet still means no pick (Finalize
+    // will refuse until the owner chooses).
+    const kindsByLine = new Map<string, Set<"PRODUCTION" | "TRADING">>();
+    for (const outcome of outcomes) {
+      const kinds = kindsByLine.get(outcome.lineId) ?? new Set();
+      kinds.add(outcome.priceKind);
+      kindsByLine.set(outcome.lineId, kinds);
+    }
+    for (const [lineId, kinds] of kindsByLine) {
+      if (kinds.size === 1) {
+        await client.query(`UPDATE costing_lines SET chosen_price_kind = $1 WHERE costing_line_id = $2`, [
+          [...kinds][0],
+          lineId,
         ]);
       }
     }
@@ -218,8 +252,14 @@ function rollUpSet(
   const totals = sumSet(priced, setQty);
   const componentRefs = components.flatMap((c) => pricedById.get(c.costing_line_id)?.resolvedRuleRefs ?? []);
 
+  // A set ships once every component in it is ready, so its own lead time is
+  // the longest of its components' — not blank just because they differ.
+  const componentLeadTimes = components.map((c) => c.lead_time_days).filter((d): d is number => d !== null);
+  const rollUpLeadTimeDays = componentLeadTimes.length > 0 ? Math.max(...componentLeadTimes) : null;
+
   return {
     lineId: line.costing_line_id,
+    priceKind: "PRODUCTION",
     qty: setQty,
     profileResolved: null,
     // Weight is per-item and a set has no single item; the component snapshots
@@ -234,6 +274,7 @@ function rollUpSet(
     unitSellingPrice: totals.pricePerSet,
     orderTotal: totals.orderTotal,
     resolvedRuleRefs: componentRefs,
+    rollUpLeadTimeDays,
     inputSnapshot: {
       lineKind: "set",
       setQty,
@@ -252,50 +293,91 @@ function rollUpSet(
 }
 
 /**
- * Prices one line, then applies the costing's customer markup (if any) as a
- * final multiplier and re-rounds — deliberately outside priceOneLine, and
- * after it rather than woven into any one route's steps, so every route
- * (Custom, Trading pricelist, Trading quote) gets the same treatment without
- * three separate copies of "multiply by 1+markup, round again." A set's
- * components each pass through here individually, so a set's total already
- * carries the markup transitively by the time rollUpSet sums them — applying
- * it a second time at the set level would double it.
+ * Prices one line for every applicable price kind, then applies the
+ * costing's customer markup (if any) as a final multiplier and re-rounds on
+ * each — deliberately outside priceLineOutcomes, so Production and Trading
+ * both get the same treatment without two separate copies of "multiply by
+ * 1+markup, round again." A set's components each pass through here
+ * individually (Production only — see priceLineOutcomes), so a set's total
+ * already carries the markup transitively by the time rollUpSet sums them.
  */
 async function calculateOneLine(
   guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
   line: CostingLineRow,
   setQty: number,
   customerMarkup: { percent: number; customerId: string } | null,
-): Promise<LineCalcOutcome> {
-  const priced = await priceOneLine(guideCtx, line, setQty);
+): Promise<LineCalcOutcome[]> {
+  const priced = await priceLineOutcomes(guideCtx, line, setQty);
   if (!customerMarkup || customerMarkup.percent === 0) return priced;
 
-  const unitPriceBeforeRounding = priced.unitPriceBeforeRounding * (1 + customerMarkup.percent);
+  const roundingIncrement = getConfigNumber(guideCtx, "ROUNDING_INCREMENT");
+  return priced.map((outcome) => {
+    const unitPriceBeforeRounding = outcome.unitPriceBeforeRounding * (1 + customerMarkup.percent);
+    const unitSellingPrice = ceilingToIncrement(unitPriceBeforeRounding, roundingIncrement);
+    return {
+      ...outcome,
+      unitPriceBeforeRounding,
+      unitSellingPrice,
+      orderTotal: unitSellingPrice * outcome.qty,
+      resolvedRuleRefs: [
+        ...outcome.resolvedRuleRefs,
+        {
+          table: "customers",
+          id: customerMarkup.customerId,
+          note: `Kenaikan harga customer: +${(customerMarkup.percent * 100).toFixed(2)}%.`,
+        },
+      ],
+    };
+  });
+}
+
+type PricedAmounts = {
+  basePricePerItem: number;
+  coatingPricePerItem: number;
+  diesPricePerItem: number;
+  unitPriceBeforeRounding: number;
+  unitSellingPrice: number;
+  orderTotal: number;
+  resolvedRuleRefs: ResolvedRuleRef[];
+};
+
+/** Pitch/Thread custom surcharge: +10% of unitPriceBeforeRounding, then re-rounded — applied identically to whichever price kind it's given, before customer markup. */
+function applyPitchSurcharge(
+  line: CostingLineRow,
+  base: PricedAmounts,
+  qty: number,
+  guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
+): PricedAmounts {
+  if (line.pitch_type !== "CUSTOM") return base;
+  const unitPriceBeforeRounding = base.unitPriceBeforeRounding * 1.1;
   const roundingIncrement = getConfigNumber(guideCtx, "ROUNDING_INCREMENT");
   const unitSellingPrice = ceilingToIncrement(unitPriceBeforeRounding, roundingIncrement);
-
   return {
-    ...priced,
+    ...base,
     unitPriceBeforeRounding,
     unitSellingPrice,
-    orderTotal: unitSellingPrice * priced.qty,
+    orderTotal: unitSellingPrice * qty,
     resolvedRuleRefs: [
-      ...priced.resolvedRuleRefs,
-      {
-        table: "customers",
-        id: customerMarkup.customerId,
-        note: `Kenaikan harga customer: +${(customerMarkup.percent * 100).toFixed(2)}%.`,
-      },
+      ...base.resolvedRuleRefs,
+      { table: "costing_lines", id: line.costing_line_id, note: "Pitch/Thread custom: +10% dari harga barang." },
     ],
   };
 }
 
-async function priceOneLine(
+/**
+ * Prices one line for every price kind that applies to it (the route merge,
+ * DEC-2026-09-14): a Production price is always computed; a Trading price is
+ * added on top whenever the line's own attributes auto-match exactly one
+ * Trading pricelist item, or — failing that — it carries a manually-entered
+ * trading_quote_id from the older per-line quote mechanism. A set's
+ * components are Production-only: dual pricing doesn't extend across an
+ * assembly, since a Trading price only exists for a whole standalone item.
+ */
+async function priceLineOutcomes(
   guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
   line: CostingLineRow,
   setQty: number,
-): Promise<LineCalcOutcome> {
-  if (!line.route) throw Errors.routeRequired();
+): Promise<LineCalcOutcome[]> {
   // A component's own qty column is unused: what gets made is qty_per_set
   // times the number of sets ordered, and that is the figure the quantity
   // break and dies amortisation must both see.
@@ -313,79 +395,132 @@ async function priceOneLine(
   const weightTolerancePercent = line.weight_tolerance_percent !== null ? Number(line.weight_tolerance_percent) : null;
   const coatingCode = line.coating_code;
 
-  if (line.route === "CUSTOM") {
-    if (diameterMm === null) throw Errors.rawSizeInvalid();
-    if (!line.product_family) throw Errors.validation("Pilih product family.");
-    if (!line.grade_input) throw Errors.validation("Pilih grade.");
+  if (diameterMm === null) throw Errors.rawSizeInvalid();
+  if (!line.product_family) throw Errors.validation("Pilih product family.");
+  if (!line.grade_input) throw Errors.validation("Pilih grade.");
 
-    const input: CustomLineInput = {
-      productFamily: line.product_family as CustomLineInput["productFamily"],
-      gradeOrSpec: line.grade_input,
-      // A line saved before size_label existed (or a legacy Metric-only line)
-      // falls back to the old "M<diameter>" synthesis, which only ever
-      // matched real Metric labels anyway — an Inch line always has
-      // size_label set now (see Workspace.tsx's size dropdown).
-      sizeLabel: line.size_label ?? deriveSizeLabel(diameterMm),
-      diameterMm,
-      qty,
-      leadTimeDays,
-      lengthMm,
-      developedCutLengthMm,
-      threadCondition: line.thread_condition,
-      coatingCode,
-      diesOption,
-      diesTotalCost,
-      weightTolerancePercent,
-    };
-    const result = calculateCustomLine(guideCtx, input);
-    return {
-      lineId: line.costing_line_id,
-      qty,
-      profileResolved: result.profileResolved,
-      rawWeightPerItemKg: result.rawWeightPerItemKg,
-      costingWeightPerItemKg: result.costingWeightPerItemKg,
-      basePricePerItem: result.basePricePerItem,
-      coatingPricePerItem: result.coatingPricePerItem,
-      diesPricePerItem: result.diesPricePerItem,
-      unitPriceBeforeRounding: result.unitPriceBeforeRounding,
-      unitSellingPrice: result.unitSellingPrice,
-      orderTotal: result.orderTotal,
-      resolvedRuleRefs: result.resolvedRuleRefs,
-      inputSnapshot: input,
-    };
+  // A line saved before size_label existed (or a legacy Metric-only line)
+  // falls back to the old "M<diameter>" synthesis, which only ever matched
+  // real Metric labels anyway — an Inch line always has size_label set now
+  // (see Workspace.tsx's size dropdown).
+  const sizeLabel = line.size_label ?? deriveSizeLabel(diameterMm);
+
+  const customInput: CustomLineInput = {
+    productFamily: line.product_family as CustomLineInput["productFamily"],
+    gradeOrSpec: line.grade_input,
+    sizeLabel,
+    diameterMm,
+    qty,
+    leadTimeDays,
+    lengthMm,
+    developedCutLengthMm,
+    threadCondition: line.thread_condition,
+    coatingCode,
+    diesOption,
+    diesTotalCost,
+    weightTolerancePercent,
+  };
+  // costing_route_rules can flag a grade as Trading-only (e.g. Washer F436 —
+  // it has no price_per_kg entry at all, by design). calculateCustomLine
+  // still throws WRONG_COSTING_ROUTE the instant it sees one, same as
+  // before the route merge — the difference now is that Production is
+  // *always* attempted, so that throw can no longer be allowed to fail the
+  // whole line the way it could when the user picked the route themselves.
+  // Caught here and treated as "no Production price for this line," not a
+  // hard error — the line still succeeds if a Trading price exists below.
+  let customResult: ReturnType<typeof calculateCustomLine> | null = null;
+  try {
+    customResult = calculateCustomLine(guideCtx, customInput);
+  } catch (err) {
+    if (!(err instanceof AppError) || err.code !== "WRONG_COSTING_ROUTE") throw err;
   }
 
-  // TRADING route: fixed pricelist when an item is resolved, otherwise a user-selected quote.
-  if (line.trading_item_id) {
-    if (diameterMm === null || !line.product_family) throw Errors.validation("Data trading tidak lengkap.");
+  const outcomes: LineCalcOutcome[] = [];
+  if (customResult) {
+    const production = applyPitchSurcharge(
+      line,
+      {
+        basePricePerItem: customResult.basePricePerItem,
+        coatingPricePerItem: customResult.coatingPricePerItem,
+        diesPricePerItem: customResult.diesPricePerItem,
+        unitPriceBeforeRounding: customResult.unitPriceBeforeRounding,
+        unitSellingPrice: customResult.unitSellingPrice,
+        orderTotal: customResult.orderTotal,
+        resolvedRuleRefs: customResult.resolvedRuleRefs,
+      },
+      qty,
+      guideCtx,
+    );
+    outcomes.push({
+      lineId: line.costing_line_id,
+      priceKind: "PRODUCTION",
+      qty,
+      profileResolved: customResult.profileResolved,
+      rawWeightPerItemKg: customResult.rawWeightPerItemKg,
+      costingWeightPerItemKg: customResult.costingWeightPerItemKg,
+      ...production,
+      inputSnapshot: { ...customInput, priceKind: "PRODUCTION", pitchType: line.pitch_type, pitchValue: line.pitch_value },
+    });
+  }
+
+  // A set/component is Production-only (see the doc comment above this
+  // function) — Trading is never attempted for one, so a route-restricted
+  // grade used inside a set has no possible price at all. Say so plainly
+  // rather than silently returning an empty outcome list, which would look
+  // to the caller like an unpriced-but-otherwise-fine line.
+  if (line.line_kind !== "item") {
+    if (!customResult) {
+      throw Errors.validation(
+        `${line.product_family} ${line.grade_input} hanya bisa dihitung lewat Trading, tidak bisa dipakai di dalam set.`,
+      );
+    }
+    return outcomes;
+  }
+
+  const match = resolveTradingItemByAttributes(guideCtx, {
+    productFamily: line.product_family,
+    gradeOrSpec: line.grade_input,
+    sizeLabel,
+    pitchType: line.pitch_type,
+    pitchValue: line.pitch_value,
+  });
+
+  if (match) {
     const pricelistInput = {
       productCategory: line.product_family,
-      sizeLabel: deriveSizeLabel(diameterMm),
+      sizeLabel,
       qty,
       coatingCode,
       productTypeLabel: line.product_family,
       diameterMm,
-      tradingItemId: line.trading_item_id,
+      tradingItemId: match.tradingItemId,
     };
-    const result = calculateTradingPricelistLine(guideCtx, pricelistInput);
-    return {
+    const tradingResult = calculateTradingPricelistLine(guideCtx, pricelistInput);
+    const trading = applyPitchSurcharge(
+      line,
+      {
+        basePricePerItem: tradingResult.basePricePerItem,
+        coatingPricePerItem: tradingResult.coatingPricePerItem,
+        diesPricePerItem: 0,
+        unitPriceBeforeRounding: tradingResult.unitPriceBeforeRounding,
+        unitSellingPrice: tradingResult.unitSellingPrice,
+        orderTotal: tradingResult.orderTotal,
+        resolvedRuleRefs: [match.ref, ...tradingResult.resolvedRuleRefs],
+      },
+      qty,
+      guideCtx,
+    );
+    outcomes.push({
       lineId: line.costing_line_id,
+      priceKind: "TRADING",
       qty,
       profileResolved: null,
       rawWeightPerItemKg: null,
       costingWeightPerItemKg: null,
-      basePricePerItem: result.basePricePerItem,
-      coatingPricePerItem: result.coatingPricePerItem,
-      diesPricePerItem: 0,
-      unitPriceBeforeRounding: result.unitPriceBeforeRounding,
-      unitSellingPrice: result.unitSellingPrice,
-      orderTotal: result.orderTotal,
-      resolvedRuleRefs: result.resolvedRuleRefs,
-      inputSnapshot: pricelistInput,
-    };
-  }
-
-  if (line.trading_quote_id) {
+      ...trading,
+      inputSnapshot: { ...pricelistInput, priceKind: "TRADING" },
+    });
+  } else if (line.trading_quote_id) {
     const { rows } = await pool.query<{
       quoted_price: string;
       tax_basis: "INCLUDE_PPN" | "EXCLUDE_PPN";
@@ -395,37 +530,57 @@ async function priceOneLine(
       `SELECT quoted_price, tax_basis, ppn_rate, landed_cost_confirmed FROM trading_quotes WHERE trading_quote_id = $1`,
       [line.trading_quote_id],
     );
-    if (rows.length === 0) throw Errors.notFound("Trading quote");
-    const quote = rows[0];
-
-    const quoteInput = {
-      quotedPrice: Number(quote.quoted_price),
-      taxBasis: quote.tax_basis,
-      ppnRate: quote.ppn_rate !== null ? Number(quote.ppn_rate) : null,
-      landedCostConfirmed: quote.landed_cost_confirmed,
-      marginPercent: line.margin_percent !== null ? Number(line.margin_percent) : null,
-      qty,
-      coatingCode,
-      productTypeLabel: line.product_family ?? "",
-      diameterMm: diameterMm ?? 0,
-    };
-    const result = calculateTradingQuoteLine(guideCtx, quoteInput);
-    return {
-      lineId: line.costing_line_id,
-      qty,
-      profileResolved: null,
-      rawWeightPerItemKg: null,
-      costingWeightPerItemKg: null,
-      basePricePerItem: result.basePricePerItem,
-      coatingPricePerItem: result.coatingPricePerItem,
-      diesPricePerItem: 0,
-      unitPriceBeforeRounding: result.unitPriceBeforeRounding,
-      unitSellingPrice: result.unitSellingPrice,
-      orderTotal: result.orderTotal,
-      resolvedRuleRefs: result.resolvedRuleRefs,
-      inputSnapshot: quoteInput,
-    };
+    if (rows.length > 0) {
+      const quote = rows[0];
+      const quoteInput = {
+        quotedPrice: Number(quote.quoted_price),
+        taxBasis: quote.tax_basis,
+        ppnRate: quote.ppn_rate !== null ? Number(quote.ppn_rate) : null,
+        landedCostConfirmed: quote.landed_cost_confirmed,
+        marginPercent: line.margin_percent !== null ? Number(line.margin_percent) : null,
+        qty,
+        coatingCode,
+        productTypeLabel: line.product_family ?? "",
+        diameterMm,
+      };
+      const quoteResult = calculateTradingQuoteLine(guideCtx, quoteInput);
+      const trading = applyPitchSurcharge(
+        line,
+        {
+          basePricePerItem: quoteResult.basePricePerItem,
+          coatingPricePerItem: quoteResult.coatingPricePerItem,
+          diesPricePerItem: 0,
+          unitPriceBeforeRounding: quoteResult.unitPriceBeforeRounding,
+          unitSellingPrice: quoteResult.unitSellingPrice,
+          orderTotal: quoteResult.orderTotal,
+          resolvedRuleRefs: quoteResult.resolvedRuleRefs,
+        },
+        qty,
+        guideCtx,
+      );
+      outcomes.push({
+        lineId: line.costing_line_id,
+        priceKind: "TRADING",
+        qty,
+        profileResolved: null,
+        rawWeightPerItemKg: null,
+        costingWeightPerItemKg: null,
+        ...trading,
+        inputSnapshot: { ...quoteInput, priceKind: "TRADING" },
+      });
+    }
   }
 
-  throw Errors.tradingTierNotFound();
+  // Trading-only grade (customResult is null) with no auto-match and no
+  // manual quote to fall back on: genuinely no price exists for this line
+  // yet. Say so explicitly rather than silently succeeding with zero
+  // outcomes, which would leave the line permanently "needs recalculation"
+  // with no error to explain why.
+  if (outcomes.length === 0) {
+    throw Errors.validation(
+      `${line.product_family} ${line.grade_input} hanya tersedia lewat Trading, dan belum ada harga Trading untuk item ini — tambahkan trading quote manual atau cek pricelist.`,
+    );
+  }
+
+  return outcomes;
 }

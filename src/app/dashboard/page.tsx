@@ -5,6 +5,7 @@ import { serializeCosting, type CostingHeaderRow } from "@/lib/costings/types";
 import { NewCostingForm } from "./NewCostingForm";
 import { LogoutButton } from "./LogoutButton";
 import { CostingTable, type DashboardCosting } from "./CostingTable";
+import { ChangePasswordButton } from "@/components/ChangePasswordButton";
 
 /**
  * Timestamps are stored UTC and displayed in Asia/Jakarta (04_DATA_MODEL).
@@ -36,12 +37,15 @@ export default async function DashboardPage() {
      FROM costing_headers ch
      LEFT JOIN users u ON u.user_id = ch.owner_user_id
      LEFT JOIN LATERAL (
-       SELECT SUM(latest.order_total) AS total_nominal
+       SELECT SUM(
+         CASE WHEN cl.unit_price_override IS NOT NULL THEN cl.unit_price_override * cl.qty ELSE latest.order_total END
+       ) AS total_nominal
        FROM costing_lines cl
        JOIN LATERAL (
          SELECT s.order_total
          FROM line_calculation_snapshots s
          WHERE s.costing_line_id = cl.costing_line_id
+           AND s.price_kind = COALESCE(cl.chosen_price_kind, 'PRODUCTION')
          ORDER BY s.created_at DESC
          LIMIT 1
        ) latest ON true
@@ -80,7 +84,7 @@ export default async function DashboardPage() {
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>Dashboard</h1>
             <p>Costing &amp; Quotation</p>
@@ -107,12 +111,12 @@ export default async function DashboardPage() {
             </>
           )}
           <span style={{ fontSize: 13 }}>{user.displayName}</span>
+          <ChangePasswordButton />
           <LogoutButton />
         </div>
       </header>
 
       <div className="card">
-        <h2>New Costing</h2>
         <NewCostingForm />
       </div>
 

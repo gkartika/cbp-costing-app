@@ -316,6 +316,50 @@ export function resolveTradingItemById(
 }
 
 /**
+ * Auto-matches a line to a trading pricelist item purely from its own
+ * attributes — no user selection involved (route merge, DEC-2026-09-14).
+ * Matches on product family + size + grade always; pitch only when the line
+ * itself carries a CUSTOM pitch value (a STANDARD-pitch line, having no
+ * stored value of its own, isn't narrowed by pitch at all). More than one
+ * surviving candidate is treated the same as zero — an ambiguous match must
+ * never silently pick one, since a Trading price only exists at all when
+ * it's unambiguous; the line simply gets no Trading price instead.
+ *
+ * costing_route_rules is checked in the other direction too: a grade
+ * explicitly flagged "Custom Production" only (e.g. Bolt A325 — structural
+ * bolts aren't traded) must never surface a Trading price even if a
+ * same-family/size/grade row exists in trading_items, whether by a future
+ * data-entry mistake or a genuine catalog addition nobody reconciled against
+ * this rule. No live data violates this today; this is the guard that keeps
+ * it that way.
+ */
+export function resolveTradingItemByAttributes(
+  ctx: GuideContext,
+  params: {
+    productFamily: string;
+    gradeOrSpec: string | null;
+    sizeLabel: string;
+    pitchType: "STANDARD" | "CUSTOM" | null;
+    pitchValue: string | null;
+  },
+): { tradingItemId: string; ref: ResolvedRuleRef } | null {
+  const routeRule = ctx.costingRouteRules.find(
+    (r) => r.productFamily === params.productFamily && r.gradeOrSpec === params.gradeOrSpec,
+  );
+  if (routeRule && routeRule.allowedCostingRoute === "Custom Production") return null;
+
+  const candidates = ctx.tradingItems.filter(
+    (t) =>
+      t.productCategory === params.productFamily &&
+      t.sizeLabel === params.sizeLabel &&
+      t.gradeOrSpec === params.gradeOrSpec &&
+      (params.pitchType !== "CUSTOM" || t.pitch === params.pitchValue),
+  );
+  if (candidates.length !== 1) return null;
+  return { tradingItemId: candidates[0].tradingItemId, ref: { table: "trading_items", id: candidates[0].tradingItemId } };
+}
+
+/**
  * Trading tier lookup with the configured inherit-previous-lower-qty-tier
  * fallback (TRADING_TIER_NO_MATCH_BEHAVIOR): an exact covering tier wins;
  * if qty falls in an unlisted gap above the highest defined tier, the

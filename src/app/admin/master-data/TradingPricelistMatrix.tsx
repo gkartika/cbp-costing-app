@@ -77,6 +77,8 @@ export function TradingPricelistMatrix(props: { onChanged?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [report, setReport] = useState<ValidationReport | null>(null);
+  const [newSize, setNewSize] = useState("");
+  const [newPitch, setNewPitch] = useState("");
 
   async function load() {
     setLoading(true);
@@ -246,14 +248,18 @@ export function TradingPricelistMatrix(props: { onChanged?: () => void }) {
         if (!ok) throw new Error((data as { error?: { message?: string } }).error?.message ?? "Gagal menyimpan perubahan.");
       }
 
-      const { ok, data } = await api<{ published: boolean; report?: ValidationReport }>(
+      const { ok, data } = await api<{ published: boolean; report?: ValidationReport; error?: { message?: string } }>(
         "/api/master-data/trading_price_tiers/publish",
         { method: "POST" },
       );
       if (!ok || !data.published) {
         setReport(data.report ?? null);
         props.onChanged?.();
-        throw new Error("Publikasi gagal — perubahan masih tersimpan sebagai pending, lihat laporan validasi di bawah.");
+        throw new Error(
+          data.report
+            ? "Publikasi gagal — perubahan masih tersimpan sebagai pending, lihat laporan validasi di bawah."
+            : (data.error?.message ?? "Publikasi gagal — perubahan masih tersimpan sebagai pending."),
+        );
       }
 
       setEdits({});
@@ -262,6 +268,71 @@ export function TradingPricelistMatrix(props: { onChanged?: () => void }) {
       props.onChanged?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Gagal menyimpan perubahan.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addSize() {
+    const family = families.find((f) => f.key === effectiveFamilyKey);
+    if (!family) return;
+    const sizeLabel = newSize.trim();
+    if (!sizeLabel) {
+      setError("Ukuran wajib diisi.");
+      return;
+    }
+    if (familyItems.some((i) => i.sizeLabel.toLowerCase() === sizeLabel.toLowerCase())) {
+      setError(`Ukuran ${sizeLabel} sudah ada untuk grade ini.`);
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    setReport(null);
+    setSuccessMsg(null);
+    try {
+      const slug = (s: string) => s.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      const sourceKey = ["TR", slug(family.category), family.grade ? slug(family.grade) : null, slug(sizeLabel)]
+        .filter(Boolean)
+        .join("-");
+
+      const { ok, data } = await api("/api/master-data/trading_items/pending", {
+        method: "POST",
+        body: {
+          operation: "create",
+          sourceKey,
+          fields: {
+            product_category: family.category,
+            product_name: family.productName,
+            grade_or_spec: family.grade,
+            size_label: sizeLabel,
+            pitch: newPitch.trim() || undefined,
+          },
+          reason: `Trading pricelist matrix: new size ${sizeLabel} for ${family.label}`,
+        },
+      });
+      if (!ok) throw new Error((data as { error?: { message?: string } }).error?.message ?? "Gagal menambah ukuran.");
+
+      const publishRes = await api<{ published: boolean; report?: ValidationReport; error?: { message?: string } }>(
+        "/api/master-data/trading_items/publish",
+        { method: "POST" },
+      );
+      if (!publishRes.ok || !publishRes.data.published) {
+        setReport(publishRes.data.report ?? null);
+        throw new Error(
+          publishRes.data.report
+            ? "Publikasi gagal — ukuran masih tersimpan sebagai pending, lihat laporan validasi di bawah."
+            : (publishRes.data.error?.message ?? "Publikasi gagal — ukuran masih tersimpan sebagai pending."),
+        );
+      }
+
+      setNewSize("");
+      setNewPitch("");
+      setSuccessMsg(`Ukuran ${sizeLabel} ditambahkan — isi harganya di tabel di atas.`);
+      await load();
+      props.onChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal menambah ukuran.");
     } finally {
       setBusy(false);
     }
@@ -344,6 +415,37 @@ export function TradingPricelistMatrix(props: { onChanged?: () => void }) {
           </table>
         </div>
       )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--surface-alt)" }}>
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span className="field-label">Ukuran baru</span>
+          <input
+            value={newSize}
+            onChange={(e) => setNewSize(e.target.value)}
+            placeholder="e.g. M24"
+            disabled={busy}
+            style={{ width: 120 }}
+          />
+        </label>
+        <label className="field" style={{ marginBottom: 0 }}>
+          <span className="field-label">Pitch (opsional)</span>
+          <input
+            value={newPitch}
+            onChange={(e) => setNewPitch(e.target.value)}
+            placeholder="e.g. 3.0"
+            disabled={busy}
+            style={{ width: 100 }}
+          />
+        </label>
+        <button className="btn secondary small" onClick={addSize} disabled={busy || !newSize.trim()}>
+          + Add size
+        </button>
+      </div>
+      <p className="helptext">
+        Menambah ukuran baru untuk grade yang sedang dipilih di atas — langsung muncul di tabel untuk diisi
+        harganya, tanpa perlu pindah ke tab Trading Items. Untuk menambah family/grade baru atau mengubah nama
+        produk, gunakan tab Trading Items.
+      </p>
 
       {report && (
         <div className="error-note" style={{ marginTop: 12 }}>

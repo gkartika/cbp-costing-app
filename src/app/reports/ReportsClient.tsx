@@ -31,6 +31,32 @@ export function ReportsClient() {
   const [po, setPo] = useState<"all" | "po" | "no_po">("all");
   const [tab, setTab] = useState<"summary" | "lines">("summary");
 
+  const [customerOptions, setCustomerOptions] = useState<string[]>([]);
+  const [salespersonOptions, setSalespersonOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [customersRes, usersRes] = await Promise.all([fetch("/api/customers"), fetch("/api/users")]);
+        if (cancelled) return;
+        if (customersRes.ok) {
+          const body = (await customersRes.json()) as { customers: { customerName: string }[] };
+          setCustomerOptions(body.customers.map((c) => c.customerName).sort());
+        }
+        if (usersRes.ok) {
+          const body = (await usersRes.json()) as { users: { displayName: string }[] };
+          setSalespersonOptions(body.users.map((u) => u.displayName).sort());
+        }
+      } catch {
+        // Filters still work as free-form values below if the pickers fail to load.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [result, setResult] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,23 +116,31 @@ export function ReportsClient() {
     <>
       <div className="card">
         <h2>Filter</h2>
-        <div className="field-row cols-3" style={{ alignItems: "end" }}>
+        <div className="field-row" style={{ alignItems: "end" }}>
           <label className="field">
             <span className="field-label">Customer</span>
-            <input
-              value={customer}
-              onChange={(e) => setCustomer(e.target.value)}
-              placeholder="Semua customer"
-            />
+            <select value={customer} onChange={(e) => setCustomer(e.target.value)}>
+              <option value="">Semua customer</option>
+              {customerOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="field">
             <span className="field-label">Salesperson</span>
-            <input
-              value={salesperson}
-              onChange={(e) => setSalesperson(e.target.value)}
-              placeholder="Semua salesperson"
-            />
+            <select value={salesperson} onChange={(e) => setSalesperson(e.target.value)}>
+              <option value="">Semua salesperson</option>
+              {salespersonOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </label>
+        </div>
+        <div className="field-row" style={{ alignItems: "end" }}>
           <label className="field">
             <span className="field-label">Dari tanggal</span>
             <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />

@@ -253,7 +253,7 @@ export function CustomersAdmin({
 
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>Customers</h1>
             <p>Nama tampil di quotation; segmen, kenaikan harga dan termin hanya untuk internal</p>

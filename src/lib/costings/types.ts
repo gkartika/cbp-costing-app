@@ -23,6 +23,8 @@ export type CostingHeaderRow = {
   signed_by_title: string | null;
   is_po: boolean;
   po_number: string | null;
+  total_discount_type: "PERCENT" | "AMOUNT" | null;
+  total_discount_value: string | null;
 };
 
 /**
@@ -31,7 +33,7 @@ export type CostingHeaderRow = {
  * list it does not always have loaded.
  */
 export function serializeCosting(
-  row: CostingHeaderRow & { account_payment_terms?: string | null },
+  row: CostingHeaderRow & { account_payment_terms?: string | null; account_markup_percent?: string | null },
   currentUserId: string,
 ) {
   const editableStatus = row.status === "draft" || row.status === "calculated";
@@ -53,6 +55,10 @@ export function serializeCosting(
     signedByName: row.signed_by_name,
     signedByTitle: row.signed_by_title,
     accountPaymentTerms: row.account_payment_terms ?? null,
+    /** The customer account's segment markup — read-only here (edited on the Customer record, not per-quotation). */
+    accountMarkupPercent: row.account_markup_percent !== undefined && row.account_markup_percent !== null
+      ? Number(row.account_markup_percent)
+      : null,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -61,6 +67,8 @@ export function serializeCosting(
     deletedAt: row.deleted_at,
     isPo: row.is_po,
     poNumber: row.po_number,
+    totalDiscountType: row.total_discount_type,
+    totalDiscountValue: row.total_discount_value !== null ? Number(row.total_discount_value) : null,
     canEdit: editableStatus && row.owner_user_id === currentUserId,
     /** Only unissued work can be deleted; a finalized quotation is voided instead. */
     canDelete: editableStatus && row.owner_user_id === currentUserId,

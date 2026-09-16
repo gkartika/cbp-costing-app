@@ -256,11 +256,6 @@ export const TAB_SPECS: TabSpec[] = [
       // read by pricing logic, but shown next to size in the pricelist
       // matrix and folded into the line description.
       { header: "pitch", dbColumn: "pitch", type: "string", required: false },
-      // purchase_price / purchase_price_ex_tax: Super Admin's internal cost
-      // reference only -- the engine prices Trading lines off
-      // trading_price_tiers.unit_price, never off these.
-      { header: "purchase_price", dbColumn: "purchase_price", type: "number", required: false },
-      { header: "purchase_price_ex_tax", dbColumn: "purchase_price_ex_tax", type: "number", required: false },
       activeCol,
     ],
   },

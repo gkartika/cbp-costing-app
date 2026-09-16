@@ -8,14 +8,17 @@ export default async function LoginPage() {
 
   // Dev/demo convenience only — DEMO_ADMIN_* are never set outside a local
   // .env.local, so this block simply doesn't render in a real deployment.
-  const demoUsername = process.env.DEMO_ADMIN_USERNAME;
-  const demoPassword = process.env.DEMO_ADMIN_PASSWORD;
+  // The NODE_ENV check is belt-and-suspenders: even if those vars were ever
+  // set by mistake in a production environment, this still never renders.
+  const isProduction = process.env.NODE_ENV === "production";
+  const demoUsername = isProduction ? undefined : process.env.DEMO_ADMIN_USERNAME;
+  const demoPassword = isProduction ? undefined : process.env.DEMO_ADMIN_PASSWORD;
 
   return (
     <div className="login-gate">
       <div className="login-card">
         <div className="brand" style={{ marginBottom: 22 }}>
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logo.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>CBP Costing App</h1>
             <p>Costing &amp; Quotation</p>

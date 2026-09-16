@@ -29,6 +29,34 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ username: string; password: string } | null>(null);
 
+  const [resetTargetId, setResetTargetId] = useState<string | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetDone, setResetDone] = useState<string | null>(null);
+
+  async function handleResetPassword(userId: string) {
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/password`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: resetPassword }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error?.message ?? "Gagal reset password.");
+      setResetDone(resetPassword);
+      setResetPassword("");
+      setResetTargetId(null);
+      router.refresh();
+    } catch (e) {
+      setResetError(e instanceof Error ? e.message : "Gagal reset password.");
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -82,7 +110,7 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
 
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">CBP</div>
+          <img src="/brand/cbp-logomark.png" alt="CBP" className="brand-mark" />
           <div className="brand-text">
             <h1>Users</h1>
             <p>Kelola akun pengguna</p>
@@ -163,6 +191,16 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
 
       <div className="card">
         <h2>Semua User</h2>
+        {resetError && (
+          <p className="error-note" role="alert">
+            {resetError}
+          </p>
+        )}
+        {resetDone && (
+          <p className="pill success" role="status" style={{ display: "inline-block", marginBottom: 12 }}>
+            Password direset ke: <strong>{resetDone}</strong>. User akan diminta ganti password saat login berikutnya.
+          </p>
+        )}
         <div className="table-scroll">
           <table>
             <thead>
@@ -171,6 +209,7 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
                 <th scope="col">Nama</th>
                 <th scope="col">Role</th>
                 <th scope="col">Status</th>
+                <th scope="col">Aksi</th>
               </tr>
             </thead>
             <tbody>
@@ -195,11 +234,56 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
                       <span className="pill success">aktif</span>
                     )}
                   </td>
+                  <td>
+                    {resetTargetId === u.userId ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <input
+                          type="text"
+                          value={resetPassword}
+                          onChange={(e) => setResetPassword(e.target.value)}
+                          placeholder="password baru"
+                          minLength={4}
+                          autoComplete="new-password"
+                          style={{ width: 130 }}
+                        />
+                        <button
+                          onClick={() => handleResetPassword(u.userId)}
+                          disabled={resetBusy || resetPassword.length < 4}
+                          className="btn small"
+                        >
+                          {resetBusy ? "…" : "Simpan"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setResetTargetId(null);
+                            setResetPassword("");
+                            setResetError(null);
+                          }}
+                          className="btn secondary small"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setResetTargetId(u.userId);
+                          setResetPassword("");
+                          setResetError(null);
+                          setResetDone(null);
+                        }}
+                        className="link-btn"
+                        style={{ fontSize: 12 }}
+                      >
+                        Reset Password
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="empty-state">
+                  <td colSpan={5} className="empty-state">
                     Belum ada user.
                   </td>
                 </tr>
