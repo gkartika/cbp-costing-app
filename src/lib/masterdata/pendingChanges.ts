@@ -194,7 +194,14 @@ export async function publishPendingChangesForTable(
 
   const sourceGuideVersionId = await getActivePublishedGuideVersionId();
   if (!sourceGuideVersionId) {
-    throw Errors.validation("Belum ada guide version yang Published untuk dijadikan dasar perubahan.");
+    // This path can only ever edit an existing Published version forward —
+    // there is nothing to clone yet on a brand-new database. The first-ever
+    // import goes through Guide Admin's whole-package import instead, which
+    // builds a guide_version from scratch rather than cloning one.
+    throw Errors.validation(
+      "Belum ada guide version yang Published — halaman ini hanya untuk mengedit versi yang sudah live. " +
+        "Untuk import pertama kali, gunakan Guide Admin > Import New Version dengan file paket lengkap (semua tab).",
+    );
   }
 
   const patches: PendingPatch[] = pending.map((p) => ({
