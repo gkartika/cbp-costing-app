@@ -28,6 +28,17 @@ export function Modal({
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
 
+  // Callers overwhelmingly pass an inline `() => setX(false)`, a fresh
+  // function every render -- if the effect below depended on `onClose`
+  // directly, typing into any field inside the modal (which re-renders the
+  // parent) would re-run it and steal focus back to the first field on every
+  // keystroke. Routing through a ref keeps the effect mount-only while still
+  // always calling the latest onClose.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const card = cardRef.current;
@@ -40,7 +51,7 @@ export function Modal({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !card) return;
@@ -68,7 +79,7 @@ export function Modal({
       document.removeEventListener("keydown", onKeyDown, true);
       previouslyFocused?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     // The overlay is a click-to-dismiss convenience for mouse users only;
