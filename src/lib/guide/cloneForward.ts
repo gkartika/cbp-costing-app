@@ -31,6 +31,50 @@ const TAB_NAME_TO_TABLE = new Map(TAB_SPECS.map((s) => [s.tabName, s.table]));
  * invariant importGuide.ts relies on — so a two-pass id-remapping build-up
  * works in a single top-to-bottom loop.
  */
+// A single-table Publish clones every row of every OTHER table forward
+// unchanged too — with a guide this size (thousands of rows once real master
+// data is loaded) one INSERT per row made this take longer than a serverless
+// function's execution limit against a real network-separated database
+// (invisible against localhost). Every cloned-unchanged row already has a
+// fully resolved value for each column (defaults were applied once, at that
+// row's original creation, and NOT NULL DEFAULT columns can never actually
+// be null on an existing row) — so batching can safely always pass every
+// column explicitly, unlike insertClonedRow below which still needs to omit
+// unset columns so a brand-new CREATE patch can fall through to a DEFAULT.
+const CLONE_BATCH_SIZE = 500;
+
+async function insertClonedRowsBatch(
+  client: Pick<PoolClient, "query">,
+  spec: TabSpec,
+  newGuideVersionId: string,
+  entries: { sourceKey: string; fieldValues: Record<string, unknown> }[],
+): Promise<Map<string, string>> {
+  const newIdBySourceKey = new Map<string, string>();
+  const columns = [spec.idColumn, "guide_version_id", "source_key", ...spec.columns.map((c) => c.dbColumn)];
+
+  for (let start = 0; start < entries.length; start += CLONE_BATCH_SIZE) {
+    const chunk = entries.slice(start, start + CLONE_BATCH_SIZE);
+    const valueRows: string[] = [];
+    const flatValues: unknown[] = [];
+    for (const entry of chunk) {
+      const newId = generateId(spec.idPrefix);
+      newIdBySourceKey.set(entry.sourceKey, newId);
+      const rowValues = [
+        newId,
+        newGuideVersionId,
+        entry.sourceKey,
+        ...spec.columns.map((c) => entry.fieldValues[c.dbColumn] ?? null),
+      ];
+      const placeholders = rowValues.map((_, i) => `$${flatValues.length + i + 1}`);
+      valueRows.push(`(${placeholders.join(", ")})`);
+      flatValues.push(...rowValues);
+    }
+    await client.query(`INSERT INTO ${spec.table} (${columns.join(", ")}) VALUES ${valueRows.join(", ")}`, flatValues);
+  }
+
+  return newIdBySourceKey;
+}
+
 export async function cloneForwardWithPatches(
   client: Pick<PoolClient, "query">,
   sourceGuideVersionId: string,
@@ -52,8 +96,8 @@ export async function cloneForwardWithPatches(
     );
 
     const oldIdToSourceKey = new Map<string, string>();
-    const newIdBySourceKey = new Map<string, string>();
     const seenSourceKeys = new Set<string>();
+    const cloneEntries: { sourceKey: string; fieldValues: Record<string, unknown> }[] = [];
 
     for (const row of rows) {
       const sourceKey = row.source_key as string;
@@ -63,9 +107,10 @@ export async function cloneForwardWithPatches(
 
       const patch = patchBySourceKey.get(sourceKey);
       const fieldValues = resolveFieldValues(spec, row, patch, oldIdToSourceKeyByTable, sourceKeyToNewIdByTable);
-      const newId = await insertClonedRow(client, spec, newGuideVersionId, sourceKey, fieldValues);
-      newIdBySourceKey.set(sourceKey, newId);
+      cloneEntries.push({ sourceKey, fieldValues });
     }
+
+    const newIdBySourceKey = await insertClonedRowsBatch(client, spec, newGuideVersionId, cloneEntries);
 
     for (const patch of tablePatches) {
       if (patch.operation !== "create") continue;

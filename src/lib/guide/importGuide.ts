@@ -149,6 +149,13 @@ export async function importGuidePackage(params: ImportGuideParams): Promise<Imp
   });
 }
 
+// A full package import can carry thousands of rows in one table (Price_Per_Kg
+// alone runs 2500+) -- one round trip per row is invisible against localhost
+// but easily exceeds a serverless function's execution limit against a real
+// network-separated database. Batching stays well clear of Postgres's
+// ~65535-parameter-per-query ceiling even for the widest tab.
+const IMPORT_BATCH_SIZE = 500;
+
 async function importTab(
   client: Pick<PoolClient, "query">,
   guideVersionId: string,
@@ -158,6 +165,24 @@ async function importTab(
 ): Promise<Map<string, string>> {
   const idMap = new Map<string, string>();
   const seenBusinessKeys = new Set<string>();
+  const columns: string[] = [spec.idColumn, "guide_version_id", "source_key", ...spec.columns.map((c) => c.dbColumn)];
+  let batch: unknown[][] = [];
+
+  async function flush(): Promise<void> {
+    if (batch.length === 0) return;
+    const valueRows: string[] = [];
+    const flatValues: unknown[] = [];
+    for (const rowValues of batch) {
+      const placeholders = rowValues.map((_, i) => `$${flatValues.length + i + 1}`);
+      valueRows.push(`(${placeholders.join(", ")})`);
+      flatValues.push(...rowValues);
+    }
+    await client.query(
+      `INSERT INTO ${spec.table} (${columns.join(", ")}) VALUES ${valueRows.join(", ")}`,
+      flatValues,
+    );
+    batch = [];
+  }
 
   for (const [rowIndex, row] of rows.entries()) {
     const keyRaw = coerce(row[spec.keyHeader], "string");
@@ -179,26 +204,22 @@ async function importTab(
     }
 
     const newId = generateId(spec.idPrefix);
-    const columns: string[] = [spec.idColumn, "guide_version_id", "source_key"];
-    const values: unknown[] = [newId, guideVersionId, keyRaw];
+    const rowValues: unknown[] = [newId, guideVersionId, keyRaw];
 
     for (const col of spec.columns) {
       const value = resolveColumnValue(spec, col, row, rowIndex, sourceKeyToId);
       if (col.required && (value === null || value === undefined)) {
         throw Errors.guideSchemaInvalid(`${spec.tabName} row ${rowIndex + 2}: missing required ${col.header}`);
       }
-      columns.push(col.dbColumn);
-      values.push(value);
+      rowValues.push(value);
     }
 
-    const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-    await client.query(
-      `INSERT INTO ${spec.table} (${columns.join(", ")}) VALUES (${placeholders})`,
-      values,
-    );
+    batch.push(rowValues);
     idMap.set(keyRaw, newId);
+    if (batch.length >= IMPORT_BATCH_SIZE) await flush();
   }
 
+  await flush();
   return idMap;
 }
 
