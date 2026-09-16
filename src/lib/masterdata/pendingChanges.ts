@@ -44,35 +44,68 @@ export async function stagePendingChange(params: {
 }): Promise<PendingChangeRow> {
   assertKnownTable(params.tableName);
   const id = generateId("pmc");
-  const { rows } = await pool.query<{
-    pending_change_id: string;
-    table_name: string;
-    operation: "create" | "update" | "deactivate";
-    source_key: string;
-    fields_json: Record<string, unknown> | null;
-    reason: string | null;
-    status: "pending" | "published" | "discarded";
-    created_by: string;
-    created_at: Date;
-  }>(
-    `INSERT INTO pending_master_changes (pending_change_id, table_name, operation, source_key, fields_json, reason, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING *`,
-    [id, params.tableName, params.operation, params.sourceKey, params.fields ? JSON.stringify(params.fields) : null, params.reason, params.actorUserId],
-  );
 
-  await writeAuditEvent({
-    action: "MASTER_DATA_CHANGE_STAGED",
-    entityType: "pending_master_changes",
-    entityId: id,
-    actorUserId: params.actorUserId,
-    actorRole: params.actorRole,
-    requestId: params.requestId,
-    afterJson: { tableName: params.tableName, operation: params.operation, sourceKey: params.sourceKey, fields: params.fields },
-    reason: params.reason ?? undefined,
+  const row = await withTransaction(async (client) => {
+    // A second stage for the same (table, source_key) while the first is
+    // still pending — a re-run bulk import, a re-edited form field, two
+    // browser tabs — supersedes it rather than stacking another row: without
+    // this, two pending "create"s for one key both survive review looking
+    // identical, and only fail (as GUIDE_DUPLICATE_KEY, not silently) once
+    // Publish actually runs cloneForwardWithPatches.
+    const superseded = await client.query<{ pending_change_id: string }>(
+      `UPDATE pending_master_changes SET status = 'discarded'
+       WHERE table_name = $1 AND source_key = $2 AND status = 'pending'
+       RETURNING pending_change_id`,
+      [params.tableName, params.sourceKey],
+    );
+    for (const s of superseded.rows) {
+      await writeAuditEvent(
+        {
+          action: "MASTER_DATA_CHANGE_DISCARDED",
+          entityType: "pending_master_changes",
+          entityId: s.pending_change_id,
+          actorUserId: params.actorUserId,
+          actorRole: params.actorRole,
+          requestId: params.requestId,
+          reason: "Superseded by a newer pending change for the same row",
+        },
+        client,
+      );
+    }
+
+    const { rows } = await client.query<{
+      pending_change_id: string;
+      table_name: string;
+      operation: "create" | "update" | "deactivate";
+      source_key: string;
+      fields_json: Record<string, unknown> | null;
+      reason: string | null;
+      status: "pending" | "published" | "discarded";
+      created_by: string;
+      created_at: Date;
+    }>(
+      `INSERT INTO pending_master_changes (pending_change_id, table_name, operation, source_key, fields_json, reason, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [id, params.tableName, params.operation, params.sourceKey, params.fields ? JSON.stringify(params.fields) : null, params.reason, params.actorUserId],
+    );
+
+    await writeAuditEvent(
+      {
+        action: "MASTER_DATA_CHANGE_STAGED",
+        entityType: "pending_master_changes",
+        entityId: id,
+        actorUserId: params.actorUserId,
+        actorRole: params.actorRole,
+        requestId: params.requestId,
+        afterJson: { tableName: params.tableName, operation: params.operation, sourceKey: params.sourceKey, fields: params.fields },
+        reason: params.reason ?? undefined,
+      },
+      client,
+    );
+
+    return rows[0];
   });
-
-  const row = rows[0];
   return {
     pendingChangeId: row.pending_change_id,
     tableName: row.table_name,
