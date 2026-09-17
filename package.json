@@ -31,6 +31,7 @@
     "rename:nut-b8-trading-grades": "dotenv -e .env.local -- tsx scripts/rename-nut-b8-trading-grades.ts",
     "split:washer-profiles": "dotenv -e .env.local -- tsx scripts/split-washer-profiles.ts",
     "update:washer-raw-cut-formula": "dotenv -e .env.local -- tsx scripts/update-washer-raw-cut-formula.ts",
+    "washer-dual-route-and-sus-grades": "dotenv -e .env.local -- tsx scripts/washer-dual-route-and-sus-grades.ts",
     "fix:zinc-coating": "dotenv -e .env.local -- tsx scripts/fix-zinc-coating.ts",
     "backfill:costing-customer-ids": "dotenv -e .env.local -- tsx scripts/backfill-costing-customer-ids.ts",
     "remove:unavailable-trading-nuts": "dotenv -e .env.local -- tsx scripts/remove-unavailable-trading-nuts.ts",
