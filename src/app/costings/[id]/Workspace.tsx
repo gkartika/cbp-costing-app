@@ -1696,7 +1696,20 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             {availableGrades.length > 0 ? (
               <select
                 value={form.gradeInput}
-                onChange={(e) => setForm({ ...form, gradeInput: e.target.value, diameterMm: "" })}
+                onChange={(e) => {
+                  const newGrade = e.target.value;
+                  const newProfile = form.productFamily
+                    ? lookups.gradeToProfile[form.productFamily]?.[newGrade]
+                    : undefined;
+                  const sizesForNewProfile = newProfile ? (lookups.sizesByProfile[newProfile] ?? []) : [];
+                  const stillValid = sizesForNewProfile.find((s) => s.sizeLabel === form.sizeLabel);
+                  setForm({
+                    ...form,
+                    gradeInput: newGrade,
+                    sizeLabel: stillValid ? form.sizeLabel : "",
+                    diameterMm: stillValid ? (stillValid.diameterMm?.toString() ?? "") : "",
+                  });
+                }}
               >
                 <option value="">-- pilih --</option>
                 {availableGrades.map((g) => (
