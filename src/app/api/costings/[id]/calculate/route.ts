@@ -92,17 +92,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
     else componentsByParent.set(line.parent_line_id, [line]);
   }
 
-  // Only a Production outcome is ever needed to roll a set up (see
-  // priceLineOutcomes) — components never carry a Trading price.
-  const pricedById = new Map<string, LineCalcOutcome>();
+  // A component prices exactly like a standalone item now (both routes
+  // attempted, route merge) — every outcome it gets (Production, Trading, or
+  // both) is kept here so rollUpSet can pick whichever the component itself
+  // is set to use.
+  const pricedById = new Map<string, LineCalcOutcome[]>();
   for (const line of lines) {
     if (line.line_kind === "set") continue;
     try {
       const setQty = line.parent_line_id ? (lines.find((l) => l.costing_line_id === line.parent_line_id)?.qty ?? 0) : 0;
       const lineOutcomes = await calculateOneLine(guideCtx, line, setQty, customerMarkup);
       outcomes.push(...lineOutcomes);
-      const production = lineOutcomes.find((o) => o.priceKind === "PRODUCTION");
-      if (production) pricedById.set(line.costing_line_id, production);
+      if (lineOutcomes.length > 0) pricedById.set(line.costing_line_id, lineOutcomes);
     } catch (err) {
       const appError = toAppError(err);
       lineErrors.push({ lineId: line.costing_line_id, code: appError.code, message: appError.userMessage });
@@ -222,11 +223,19 @@ export const POST = apiHandler(async (req: NextRequest, ctx) => {
  *
  * There is no rounding step here: each component is already on the rounding
  * grid, so their total is too.
+ *
+ * A component can now have a Production outcome, a Trading outcome, or both
+ * (route merge extended to components) — same convention as every other
+ * price read in the app (dashboard/finalize/quotation/reports all use
+ * COALESCE(chosen_price_kind, 'PRODUCTION')): a component with only one
+ * priced kind uses it regardless of chosen_price_kind (nothing to choose
+ * between yet), one with both uses whichever the component is set to,
+ * defaulting to Production until the owner picks.
  */
 function rollUpSet(
   line: CostingLineRow,
   components: CostingLineRow[],
-  pricedById: Map<string, LineCalcOutcome>,
+  pricedById: Map<string, LineCalcOutcome[]>,
 ): LineCalcOutcome {
   if (!line.qty || line.qty < 1) throw Errors.qtyInvalid();
   const setQty = line.qty;
@@ -234,9 +243,17 @@ function rollUpSet(
     throw Errors.validation(`Set #${line.line_no} belum punya komponen — tambahkan minimal satu.`);
   }
 
+  const chosenOutcomeFor = (c: CostingLineRow): LineCalcOutcome | undefined => {
+    const componentOutcomes = pricedById.get(c.costing_line_id);
+    if (!componentOutcomes || componentOutcomes.length === 0) return undefined;
+    if (componentOutcomes.length === 1) return componentOutcomes[0];
+    const preferred = c.chosen_price_kind ?? "PRODUCTION";
+    return componentOutcomes.find((o) => o.priceKind === preferred) ?? componentOutcomes[0];
+  };
+
   const priced: PricedComponent[] = [];
   for (const c of components) {
-    const outcome = pricedById.get(c.costing_line_id);
+    const outcome = chosenOutcomeFor(c);
     // A component that failed to price already recorded its own lineError, so
     // the request is failing regardless; bail rather than quote a partial set.
     if (!outcome) throw Errors.validation(`Komponen pada set #${line.line_no} gagal dihitung.`);
@@ -250,7 +267,7 @@ function rollUpSet(
   }
 
   const totals = sumSet(priced, setQty);
-  const componentRefs = components.flatMap((c) => pricedById.get(c.costing_line_id)?.resolvedRuleRefs ?? []);
+  const componentRefs = components.flatMap((c) => chosenOutcomeFor(c)?.resolvedRuleRefs ?? []);
 
   // A set ships once every component in it is ready, so its own lead time is
   // the longest of its components' — not blank just because they differ.
@@ -286,7 +303,7 @@ function rollUpSet(
         sizeLabel: c.size_label,
         qtyPerSet: c.qty_per_set,
         manufacturedQty: effectiveComponentQty(c.qty_per_set ?? 1, setQty),
-        unitSellingPrice: pricedById.get(c.costing_line_id)?.unitSellingPrice ?? null,
+        unitSellingPrice: chosenOutcomeFor(c)?.unitSellingPrice ?? null,
       })),
     },
   };
@@ -298,8 +315,9 @@ function rollUpSet(
  * each — deliberately outside priceLineOutcomes, so Production and Trading
  * both get the same treatment without two separate copies of "multiply by
  * 1+markup, round again." A set's components each pass through here
- * individually (Production only — see priceLineOutcomes), so a set's total
- * already carries the markup transitively by the time rollUpSet sums them.
+ * individually (every price kind that applies, same as a standalone item —
+ * see priceLineOutcomes), so a set's total already carries the markup
+ * transitively by the time rollUpSet sums them.
  */
 async function calculateOneLine(
   guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
@@ -403,9 +421,12 @@ function priceCustomPartLine(line: CostingLineRow, setQty: number): LineCalcOutc
  * DEC-2026-09-14): a Production price is always computed; a Trading price is
  * added on top whenever the line's own attributes auto-match exactly one
  * Trading pricelist item, or — failing that — it carries a manually-entered
- * trading_quote_id from the older per-line quote mechanism. A set's
- * components are Production-only: dual pricing doesn't extend across an
- * assembly, since a Trading price only exists for a whole standalone item.
+ * trading_quote_id from the older per-line quote mechanism. Applies exactly
+ * the same way to a set's components as to a standalone item (2026-09-17) —
+ * a component's own attributes (family/grade/size) can match the Trading
+ * pricelist just as well as an item's can, so restricting it to Production
+ * only hid a real price and, for a Trading-only grade with no
+ * costing_route_rules override, made it entirely unusable inside a set.
  */
 async function priceLineOutcomes(
   guideCtx: Awaited<ReturnType<typeof loadGuideContext>>,
@@ -514,20 +535,6 @@ async function priceLineOutcomes(
       ...production,
       inputSnapshot: { ...customInput, priceKind: "PRODUCTION", pitchType: line.pitch_type, pitchValue: line.pitch_value },
     });
-  }
-
-  // A set/component is Production-only (see the doc comment above this
-  // function) — Trading is never attempted for one, so a route-restricted
-  // grade used inside a set has no possible price at all. Say so plainly
-  // rather than silently returning an empty outcome list, which would look
-  // to the caller like an unpriced-but-otherwise-fine line.
-  if (line.line_kind !== "item") {
-    if (!customResult) {
-      throw Errors.validation(
-        `${line.product_family} ${line.grade_input} hanya bisa dihitung lewat Trading, tidak bisa dipakai di dalam set.`,
-      );
-    }
-    return outcomes;
   }
 
   const match = resolveTradingItemByAttributes(guideCtx, {

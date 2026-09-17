@@ -1556,7 +1556,14 @@ const CUSTOMER_ADD_NEW = "__add_new__";
 
                     {components.map((c, ci) => (
                       <tr key={c.costingLineId} className="component-row">
-                        <td />
+                        <td>
+                          <PriceKindControl
+                            line={c}
+                            costingId={costing.costingId}
+                            canEdit={canEdit && editableStatus}
+                            onSaved={refreshCosting}
+                          />
+                        </td>
                         <td style={{ paddingLeft: 18, color: "var(--muted)" }}>{`${displayNo}.${ci + 1}`}</td>
                         <td style={{ color: "var(--muted)" }}>
                           {c.description ?? describeLine(c)}
