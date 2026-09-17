@@ -41,6 +41,11 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
   const [nameBusy, setNameBusy] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
 
+  const [roleTargetId, setRoleTargetId] = useState<string | null>(null);
+  const [roleValue, setRoleValue] = useState("costing_user");
+  const [roleBusy, setRoleBusy] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
+
   async function handleRenameUser(userId: string) {
     setNameBusy(true);
     setNameError(null);
@@ -59,6 +64,27 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
       setNameError(e instanceof Error ? e.message : "Gagal mengubah nama tampilan.");
     } finally {
       setNameBusy(false);
+    }
+  }
+
+  async function handleChangeRole(userId: string) {
+    setRoleBusy(true);
+    setRoleError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/roles`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roles: [roleValue] }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error?.message ?? "Gagal mengubah role.");
+      setUsers((prev) => prev.map((u) => (u.userId === userId ? { ...u, roles: body.roles } : u)));
+      setRoleTargetId(null);
+      router.refresh();
+    } catch (e) {
+      setRoleError(e instanceof Error ? e.message : "Gagal mengubah role.");
+    } finally {
+      setRoleBusy(false);
     }
   }
 
@@ -224,6 +250,11 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
             {nameError}
           </p>
         )}
+        {roleError && (
+          <p className="error-note" role="alert">
+            {roleError}
+          </p>
+        )}
         {resetError && (
           <p className="error-note" role="alert">
             {resetError}
@@ -301,7 +332,45 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
                       </span>
                     )}
                   </td>
-                  <td>{u.roles.map((r) => ROLE_LABELS[r] ?? r).join(", ") || "—"}</td>
+                  <td>
+                    {roleTargetId === u.userId ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <select value={roleValue} onChange={(e) => setRoleValue(e.target.value)}>
+                          <option value="costing_user">Costing User</option>
+                          <option value="costing_head">Costing Head</option>
+                          <option value="super_admin">Super Admin</option>
+                          <option value="auditor">Auditor</option>
+                        </select>
+                        <button onClick={() => handleChangeRole(u.userId)} disabled={roleBusy} className="btn small">
+                          {roleBusy ? "…" : "Simpan"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRoleTargetId(null);
+                            setRoleError(null);
+                          }}
+                          className="btn secondary small"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    ) : (
+                      <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                        {u.roles.map((r) => ROLE_LABELS[r] ?? r).join(", ") || "—"}
+                        <button
+                          onClick={() => {
+                            setRoleTargetId(u.userId);
+                            setRoleValue(u.roles[0] ?? "costing_user");
+                            setRoleError(null);
+                          }}
+                          className="link-btn"
+                          style={{ fontSize: 12 }}
+                        >
+                          Edit
+                        </button>
+                      </span>
+                    )}
+                  </td>
                   <td>
                     {!u.active ? (
                       <span className="pill danger">nonaktif</span>
