@@ -10,10 +10,14 @@ export default async function CustomersPage() {
 
   const { rows } = await pool.query<CustomerRow>(`SELECT * FROM customers WHERE active = TRUE ORDER BY customer_name`);
 
+  const isSuperAdmin = user.roles.includes("super_admin");
+  const canEditCustomer = isSuperAdmin || user.roles.includes("costing_head");
+
   return (
     <CustomersAdmin
       initialCustomers={rows.map(serializeCustomer)}
-      isSuperAdmin={user.roles.includes("super_admin")}
+      isSuperAdmin={isSuperAdmin}
+      canEditCustomer={canEditCustomer}
     />
   );
 }

@@ -9,7 +9,7 @@ beforeEach(async () => {
   await seedGuideVersion(`CUST-TEST-${Date.now()}`);
 });
 
-describe("AT-CUST-001: any authenticated user can create a customer, only Super Admin can edit one", () => {
+describe("AT-CUST-001: any authenticated user can create a customer, only Costing Head/Super Admin can edit one", () => {
   it("a plain costing_user can create a customer", async () => {
     await createUser({ username: "cust_001", password: PASSWORD, roles: ["costing_user"] });
     const { cookie } = await login("cust_001", PASSWORD);
@@ -36,6 +36,20 @@ describe("AT-CUST-001: any authenticated user can create a customer, only Super 
       body: { segment: "Distributor" },
     });
     expect(res.status).toBe(403);
+  });
+
+  it("a costing_head can edit an existing customer", async () => {
+    await createUser({ username: "cust_head_001", password: PASSWORD, roles: ["costing_head"] });
+    const { cookie } = await login("cust_head_001", PASSWORD);
+
+    const created = await apiFetch("/api/customers", { method: "POST", cookie, body: { customerName: "PT Head Edit" } });
+    const res = await apiFetch(`/api/customers/${created.json.customerId}`, {
+      method: "PATCH",
+      cookie,
+      body: { segment: "Distributor" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.segment).toBe("Distributor");
   });
 
   it("Super Admin can edit segment, markup, payment terms and code", async () => {
@@ -269,7 +283,7 @@ describe("AT-CUST-002: a customer's markup applies to every line item quoted for
   });
 });
 
-describe("AT-CUST-003: bulk import upserts a customer masterlist by name, Super Admin only", () => {
+describe("AT-CUST-003: bulk import upserts a customer masterlist by name, Costing Head/Super Admin only", () => {
   it("a plain costing_user cannot bulk import", async () => {
     await createUser({ username: "bulk_001", password: PASSWORD, roles: ["costing_user"] });
     const { cookie } = await login("bulk_001", PASSWORD);
@@ -279,6 +293,17 @@ describe("AT-CUST-003: bulk import upserts a customer masterlist by name, Super 
       body: { rows: [{ customerName: "PT Bulk Guard" }] },
     });
     expect(res.status).toBe(403);
+  });
+
+  it("a costing_head can bulk import", async () => {
+    await createUser({ username: "bulk_head_001", password: PASSWORD, roles: ["costing_head"] });
+    const { cookie } = await login("bulk_head_001", PASSWORD);
+    const res = await apiFetch("/api/customers/bulk-import", {
+      method: "POST",
+      cookie,
+      body: { rows: [{ customerName: `PT Bulk Head ${Date.now()}` }] },
+    });
+    expect(res.status).toBe(200);
   });
 
   it("creates new customers and reports created/updated/error per row", async () => {

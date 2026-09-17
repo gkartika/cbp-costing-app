@@ -26,7 +26,7 @@ const CreateUserSchema = z.object({
   username: z.string().min(3).max(64),
   password: z.string().min(4).max(200).optional(),
   displayName: z.string().min(1).max(200).optional(),
-  roles: z.array(z.enum([ROLES.COSTING_USER, ROLES.SUPER_ADMIN, ROLES.AUDITOR])).min(1).optional(),
+  roles: z.array(z.enum([ROLES.COSTING_USER, ROLES.COSTING_HEAD, ROLES.SUPER_ADMIN, ROLES.AUDITOR])).min(1).optional(),
 });
 
 export const GET = apiHandler(async () => {

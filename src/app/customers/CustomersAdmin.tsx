@@ -99,9 +99,11 @@ function toEditForm(c: Customer): EditForm {
 export function CustomersAdmin({
   initialCustomers,
   isSuperAdmin,
+  canEditCustomer,
 }: {
   initialCustomers: Customer[];
   isSuperAdmin: boolean;
+  canEditCustomer: boolean;
 }) {
   const router = useRouter();
   const [customers, setCustomers] = useState(initialCustomers);
@@ -307,7 +309,7 @@ export function CustomersAdmin({
         </form>
         <p className="hint" style={{ marginTop: 0 }}>
           Siapa pun bisa menambah customer baru. Segmen, kenaikan harga dan termin pembayaran hanya bisa diisi/diubah
-          oleh Super Admin lewat tombol Edit di bawah.
+          oleh Costing Head atau Super Admin lewat tombol Edit di bawah.
         </p>
         {error && (
           <p className="error-note" role="alert">
@@ -316,14 +318,16 @@ export function CustomersAdmin({
         )}
       </div>
 
-      {isSuperAdmin && (
+      {canEditCustomer && (
         <div className="card">
           <div className="section-actions">
             <h2 style={{ marginBottom: 0 }}>Export / Bulk Import (.xlsx)</h2>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <a className="btn secondary small" href="/api/customers/export-xlsx" download="Customers.xlsx">
-                Export (.xlsx)
-              </a>
+              {isSuperAdmin && (
+                <a className="btn secondary small" href="/api/customers/export-xlsx" download="Customers.xlsx">
+                  Export (.xlsx)
+                </a>
+              )}
               <label className="btn secondary small" style={{ cursor: "pointer", margin: 0 }}>
                 Bulk import (.xlsx)
                 <input
@@ -354,7 +358,7 @@ export function CustomersAdmin({
         </div>
       )}
 
-      {isSuperAdmin && (
+      {canEditCustomer && (
         <div className="card">
           <h2>Bulk Import Customer</h2>
           <p className="hint" style={{ marginTop: 0 }}>
@@ -428,7 +432,7 @@ export function CustomersAdmin({
                 <th scope="col">Segmen</th>
                 <th scope="col">Kenaikan Harga</th>
                 <th scope="col">Termin Pembayaran</th>
-                {isSuperAdmin && (
+                {canEditCustomer && (
                   <th scope="col">
                     <span className="sr-only">Actions</span>
                   </th>
@@ -513,7 +517,7 @@ export function CustomersAdmin({
                         </em>
                       )}
                     </td>
-                    {isSuperAdmin && (
+                    {canEditCustomer && (
                       <td>
                         <button onClick={() => openEdit(c)} className="btn secondary small">
                           Edit
@@ -525,7 +529,7 @@ export function CustomersAdmin({
               )}
               {customers.length === 0 && (
                 <tr>
-                  <td colSpan={isSuperAdmin ? 6 : 5} className="empty-state">
+                  <td colSpan={canEditCustomer ? 6 : 5} className="empty-state">
                     Belum ada customer.
                   </td>
                 </tr>

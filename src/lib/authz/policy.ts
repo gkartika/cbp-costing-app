@@ -3,6 +3,7 @@ import type { SessionUser } from "@/lib/auth/session";
 
 export const ROLES = {
   COSTING_USER: "costing_user",
+  COSTING_HEAD: "costing_head",
   SUPER_ADMIN: "super_admin",
   AUDITOR: "auditor",
 } as const;
@@ -11,6 +12,11 @@ export type Role = (typeof ROLES)[keyof typeof ROLES];
 
 export function hasRole(user: SessionUser, role: Role): boolean {
   return user.roles.includes(role);
+}
+
+/** Costing Head carries every Costing User permission plus customer-editing rights, so any check gated on "costing_user" must also pass for "costing_head". */
+function hasCostingUserAccess(user: SessionUser): boolean {
+  return hasRole(user, ROLES.COSTING_USER) || hasRole(user, ROLES.COSTING_HEAD) || hasRole(user, ROLES.SUPER_ADMIN);
 }
 
 /**
@@ -40,16 +46,16 @@ export const policy = {
     }
   },
 
-  /** Creating a costing is allowed for any authenticated costing_user or super_admin; the creator becomes owner. */
+  /** Creating a costing is allowed for any authenticated costing_user, costing_head or super_admin; the creator becomes owner. */
   assertCanCreateCosting(user: SessionUser): void {
-    if (!hasRole(user, ROLES.COSTING_USER) && !hasRole(user, ROLES.SUPER_ADMIN)) {
+    if (!hasCostingUserAccess(user)) {
       throw Errors.forbidden();
     }
   },
 
   /** Any reader may duplicate a readable costing into a new draft they own. */
   assertCanDuplicateCosting(user: SessionUser): void {
-    if (!hasRole(user, ROLES.COSTING_USER) && !hasRole(user, ROLES.SUPER_ADMIN)) {
+    if (!hasCostingUserAccess(user)) {
       throw Errors.forbidden();
     }
   },
@@ -91,14 +97,14 @@ export const policy = {
 
   /** Any authenticated user may register a new customer (business decision 2026-09-04) — the same low bar as today's inline create-by-name. */
   assertCanCreateCustomer(user: SessionUser): void {
-    if (!hasRole(user, ROLES.COSTING_USER) && !hasRole(user, ROLES.SUPER_ADMIN)) {
+    if (!hasCostingUserAccess(user)) {
       throw Errors.forbidden();
     }
   },
 
-  /** Editing an existing customer — name, segment, markup, payment terms — is Super Admin only. Creating one is a different, wider-open action (assertCanCreateCustomer). */
+  /** Editing an existing customer — name, segment, markup, payment terms — is Costing Head and Super Admin only. Creating one is a different, wider-open action (assertCanCreateCustomer). */
   assertCanEditCustomer(user: SessionUser): void {
-    if (!hasRole(user, ROLES.SUPER_ADMIN)) {
+    if (!hasRole(user, ROLES.COSTING_HEAD) && !hasRole(user, ROLES.SUPER_ADMIN)) {
       throw Errors.forbidden();
     }
   },

@@ -15,10 +15,11 @@ export async function requireUser(): Promise<SessionUser> {
   return user;
 }
 
-/** The role recorded on audit events reflects the user's role at the time of the action (AUD-015 note). Super Admin outranks Auditor outranks Costing User when a user holds more than one. */
+/** The role recorded on audit events reflects the user's role at the time of the action (AUD-015 note). Super Admin outranks Auditor outranks Costing Head outranks Costing User when a user holds more than one. */
 export function primaryRoleFromRoles(roles: string[]): string {
   if (roles.includes("super_admin")) return "super_admin";
   if (roles.includes("auditor")) return "auditor";
+  if (roles.includes("costing_head")) return "costing_head";
   if (roles.includes("costing_user")) return "costing_user";
   return "unknown";
 }

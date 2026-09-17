@@ -1,8 +1,8 @@
 /**
- * Creates a non-Super-Admin account (costing_user or auditor) from the command
- * line. The app's own Super Admin > Users screen is the normal way to do this;
- * this script exists for local/dev setup and for seeding a pilot's first
- * regular users without clicking through the UI.
+ * Creates a non-Super-Admin account (costing_user, costing_head or auditor)
+ * from the command line. The app's own Super Admin > Users screen is the
+ * normal way to do this; this script exists for local/dev setup and for
+ * seeding a pilot's first regular users without clicking through the UI.
  *
  * Usage:
  *   npm run seed:user -- --username=budi --password=... --displayName="Budi" --role=costing_user
@@ -11,7 +11,7 @@ import { pool } from "../src/lib/db";
 import { hashPassword } from "../src/lib/auth/password";
 import { generateId } from "../src/lib/ids";
 
-const ALLOWED_ROLES = ["costing_user", "auditor"] as const;
+const ALLOWED_ROLES = ["costing_user", "costing_head", "auditor"] as const;
 type AllowedRole = (typeof ALLOWED_ROLES)[number];
 
 function arg(name: string): string | undefined {
@@ -27,7 +27,9 @@ async function main() {
   const role = (arg("role") ?? "costing_user") as AllowedRole;
 
   if (!username || !password) {
-    console.error("Usage: npm run seed:user -- --username=<u> --password=<p> [--displayName=<name>] [--role=costing_user|auditor]");
+    console.error(
+      "Usage: npm run seed:user -- --username=<u> --password=<p> [--displayName=<name>] [--role=costing_user|costing_head|auditor]",
+    );
     process.exit(1);
   }
   if (password.length < 8) {

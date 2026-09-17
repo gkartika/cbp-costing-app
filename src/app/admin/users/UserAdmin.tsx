@@ -14,6 +14,7 @@ type User = {
 
 const ROLE_LABELS: Record<string, string> = {
   costing_user: "Costing User",
+  costing_head: "Costing Head",
   super_admin: "Super Admin",
   auditor: "Auditor",
 };
@@ -177,6 +178,7 @@ export function UserAdmin({ initialUsers, currentUserId }: { initialUsers: User[
               <span className="field-label">Role</span>
               <select value={role} onChange={(e) => setRole(e.target.value)}>
                 <option value="costing_user">Costing User</option>
+                <option value="costing_head">Costing Head</option>
                 <option value="super_admin">Super Admin</option>
                 <option value="auditor">Auditor</option>
               </select>
