@@ -43,6 +43,12 @@ jobs:
           echo "DATABASE_URL=postgresql://cbp_app:ci_only_not_a_real_secret@localhost:5432/cbp_costing_test" > .env.test
           echo "NODE_ENV=test" >> .env.test
 
+      # tsc needs the App Router's generated LayoutProps/PageProps types
+      # (.next/types), which only exist after a build or this lightweight
+      # generator — a fresh checkout has neither.
+      - name: Generate route types
+        run: npx next typegen
+
       - name: Type check
         run: npx tsc --noEmit
 
