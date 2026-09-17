@@ -28,6 +28,7 @@
     "fill:washer-trading-sizes": "dotenv -e .env.local -- tsx scripts/fill-washer-trading-sizes.ts",
     "add:washer-f844-grade-rule": "dotenv -e .env.local -- tsx scripts/add-washer-f844-grade-rule.ts",
     "add:washer-f844-route-rule": "dotenv -e .env.local -- tsx scripts/add-washer-f844-route-rule.ts",
+    "rename:nut-b8-trading-grades": "dotenv -e .env.local -- tsx scripts/rename-nut-b8-trading-grades.ts",
     "fix:zinc-coating": "dotenv -e .env.local -- tsx scripts/fix-zinc-coating.ts",
     "backfill:costing-customer-ids": "dotenv -e .env.local -- tsx scripts/backfill-costing-customer-ids.ts",
     "remove:unavailable-trading-nuts": "dotenv -e .env.local -- tsx scripts/remove-unavailable-trading-nuts.ts",
