@@ -456,19 +456,36 @@ async function priceLineOutcomes(
     diesTotalCost,
     weightTolerancePercent,
   };
-  // costing_route_rules can flag a grade as Trading-only (e.g. Washer F436 —
-  // it has no price_per_kg entry at all, by design). calculateCustomLine
-  // still throws WRONG_COSTING_ROUTE the instant it sees one, same as
-  // before the route merge — the difference now is that Production is
-  // *always* attempted, so that throw can no longer be allowed to fail the
-  // whole line the way it could when the user picked the route themselves.
-  // Caught here and treated as "no Production price for this line," not a
-  // hard error — the line still succeeds if a Trading price exists below.
+  // Production is now *always* attempted (route merge, DEC-2026-09-14), so
+  // any of calculateCustomLine's normal "this line has no usable Production
+  // data" outcomes can no longer be allowed to fail the whole line — only
+  // that a Trading price might still exist below. WRONG_COSTING_ROUTE was
+  // the original case (a grade explicitly locked to Trading); opening dual
+  // routes for more grades surfaced the same problem for ordinary reference
+  // gaps too — e.g. Washer F436's metric sizes have trading_items pricing
+  // but no washer_od/washer_thickness (RAW_SIZE_INVALID), and any grade's
+  // untiered/edge sizes can be missing a price_per_kg row while still
+  // having a Trading price (PRICE_GUIDE_NOT_FOUND). Every code here is a
+  // calculateCustomLine resolution step reporting "no data," not an
+  // application bug — QTY_INVALID/DIES_COST_REQUIRED and anything not in
+  // this list are real input problems and still fail the line outright.
+  const NO_PRODUCTION_DATA_CODES = new Set([
+    "WRONG_COSTING_ROUTE",
+    "PROFILE_NOT_FOUND",
+    "PROFILE_AMBIGUOUS",
+    "HEX_WIDTH_MISSING",
+    "RAW_SIZE_INVALID",
+    "RAW_BAR_UNAVAILABLE",
+    "WEIGHT_INVALID",
+    "PRICE_GUIDE_NOT_FOUND",
+    "ADJUSTMENT_NO_MATCH",
+    "ADJUSTMENT_AMBIGUOUS",
+  ]);
   let customResult: ReturnType<typeof calculateCustomLine> | null = null;
   try {
     customResult = calculateCustomLine(guideCtx, customInput);
   } catch (err) {
-    if (!(err instanceof AppError) || err.code !== "WRONG_COSTING_ROUTE") throw err;
+    if (!(err instanceof AppError) || !NO_PRODUCTION_DATA_CODES.has(err.code)) throw err;
   }
 
   const outcomes: LineCalcOutcome[] = [];
