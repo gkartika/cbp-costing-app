@@ -33,6 +33,7 @@
     "update:washer-raw-cut-formula": "dotenv -e .env.local -- tsx scripts/update-washer-raw-cut-formula.ts",
     "washer-dual-route-and-sus-grades": "dotenv -e .env.local -- tsx scripts/washer-dual-route-and-sus-grades.ts",
     "washer-nut-dual-route-and-prices": "dotenv -e .env.local -- tsx scripts/washer-nut-dual-route-and-prices.ts",
+    "add:nut-2h-m10-size": "dotenv -e .env.local -- tsx scripts/add-nut-2h-m10-size.ts",
     "fix:zinc-coating": "dotenv -e .env.local -- tsx scripts/fix-zinc-coating.ts",
     "backfill:costing-customer-ids": "dotenv -e .env.local -- tsx scripts/backfill-costing-customer-ids.ts",
     "remove:unavailable-trading-nuts": "dotenv -e .env.local -- tsx scripts/remove-unavailable-trading-nuts.ts",
