@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet, apiPost, apiPatch, apiDelete, type ApiError } from "./clientApi";
 import { buildLineTree, defaultSetDescription } from "@/lib/costings/sets";
-import { DEFAULT_PAYMENT_TERMS } from "@/lib/costings/paymentTerms";
+import { DEFAULT_PAYMENT_TERMS, PAYMENT_TERMS_OPTIONS } from "@/lib/costings/paymentTerms";
 import { StatusPill } from "@/components/Pills";
 import { Modal } from "@/components/Modal";
 import { Ticket, TicketLine, TicketDivider, TicketTotal } from "@/components/Ticket";
@@ -28,21 +28,6 @@ type Costing = {
   totalDiscountValue: number | null;
   updatedAt: string;
   canEdit: boolean;
-};
-
-type AuditEvent = {
-  auditEventId: string;
-  action: string;
-  entityType: string;
-  entityId: string;
-  beforeJson: unknown;
-  afterJson: unknown;
-  changedFields: string[] | null;
-  reason: string | null;
-  actorDisplayName: string | null;
-  actorRole: string;
-  occurredAt: string;
-  requestId: string;
 };
 
 type Explanation = {
@@ -125,6 +110,17 @@ type LineForm = {
   pitchValue: string;
   /** Components only: how many of this part go into one set. */
   qtyPerSet: string;
+  /** Custom Part only — no calculation, this is the whole price (stored as unitPriceOverride). */
+  customUnitPrice: string;
+};
+
+/**
+ * Display-only relabeling of a product family value — the stored value
+ * (`product_family` on the line, used throughout calc code and route rules)
+ * never changes, only what the dropdown shows for it.
+ */
+const PRODUCT_FAMILY_LABELS: Record<string, string> = {
+  Bolt: "Hex Bolt",
 };
 
 type Lookups = {
@@ -198,6 +194,7 @@ const EMPTY_FORM: LineForm = {
   pitchType: "STANDARD",
   pitchValue: "",
   qtyPerSet: "1",
+  customUnitPrice: "",
 };
 
 function lineToForm(l: Line): LineForm {
@@ -228,6 +225,7 @@ function lineToForm(l: Line): LineForm {
     pitchType: l.pitchType ?? "STANDARD",
     pitchValue: l.pitchValue ?? "",
     qtyPerSet: l.qtyPerSet?.toString() ?? "1",
+    customUnitPrice: l.unitPriceOverride?.toString() ?? "",
   };
 }
 
@@ -566,6 +564,19 @@ function TradingQuoteManualPanel({
     }
   }
 
+  // Mirrors calculateTradingQuoteLine (src/lib/calc/tradingPipeline.ts) purely
+  // for display, so the user sees the resulting sell price before saving —
+  // not used for the actual submission, the server computes that itself.
+  const previewPrice = (() => {
+    const price = Number(quotedPrice);
+    const margin = Number(marginPercent);
+    const ppn = Number(ppnRate);
+    if (!price || price <= 0 || !Number.isFinite(margin) || margin < 0 || margin >= 1) return null;
+    const exTaxPrice = taxBasis === "INCLUDE_PPN" ? (Number.isFinite(ppn) ? price / (1 + ppn) : null) : price;
+    if (exTaxPrice === null) return null;
+    return exTaxPrice / (1 - margin);
+  })();
+
   return (
     <div style={{ marginBottom: 12, border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 10 }}>
       <button
@@ -582,37 +593,58 @@ function TradingQuoteManualPanel({
         )}
       </button>
       <p className="hint" style={{ margin: "4px 0 0" }}>
-        Hanya dipakai kalau item ini <strong>tidak</strong> auto-match ke pricelist Trading. Harga akan
-        dinormalisasi ex-PPN lalu dinaikkan sesuai Margin di bawah.
+        Dipakai hanya kalau item ini <strong>tidak</strong> auto-match ke pricelist Trading.
+        <br />
+        1) harga supplier → dinormalisasi ex-PPN, 2) dinaikkan sesuai Margin, 3) dikonfirmasi sebelum dipakai.
       </p>
       {open && (
-        <div style={{ marginTop: 8 }}>
-          <label className="field" style={{ marginBottom: 8 }}>
-            <span className="field-label">Harga quote (dari supplier)</span>
-            <input type="number" min="0" value={quotedPrice} onChange={(e) => setQuotedPrice(e.target.value)} />
-          </label>
-          <label className="field" style={{ marginBottom: 8 }}>
-            <span className="field-label">Margin (0–0.999, e.g. 0.25)</span>
-            <input
-              type="number"
-              step="0.01"
-              value={marginPercent}
-              onChange={(e) => onMarginPercentChange(e.target.value)}
-            />
-          </label>
-          <label className="field" style={{ marginBottom: 8 }}>
-            <span className="field-label">Basis pajak</span>
-            <select value={taxBasis} onChange={(e) => setTaxBasis(e.target.value as typeof taxBasis)}>
-              <option value="EXCLUDE_PPN">Belum termasuk PPN</option>
-              <option value="INCLUDE_PPN">Sudah termasuk PPN</option>
-            </select>
-          </label>
+        <div style={{ marginTop: 10 }}>
+          <p className="field-label" style={{ marginBottom: 6 }}>
+            1. Harga dari supplier
+          </p>
+          <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+            <label className="field" style={{ flex: 1, marginBottom: 0 }}>
+              <span className="field-label">Harga quote</span>
+              <input type="number" min="0" value={quotedPrice} onChange={(e) => setQuotedPrice(e.target.value)} />
+            </label>
+            <label className="field" style={{ flex: 1, marginBottom: 0 }}>
+              <span className="field-label">Basis pajak</span>
+              <select value={taxBasis} onChange={(e) => setTaxBasis(e.target.value as typeof taxBasis)}>
+                <option value="EXCLUDE_PPN">Belum termasuk PPN</option>
+                <option value="INCLUDE_PPN">Sudah termasuk PPN</option>
+              </select>
+            </label>
+          </div>
           {taxBasis === "INCLUDE_PPN" && (
             <label className="field" style={{ marginBottom: 8 }}>
               <span className="field-label">Tarif PPN (mis. 0.11)</span>
               <input type="number" step="0.01" min="0" value={ppnRate} onChange={(e) => setPpnRate(e.target.value)} />
             </label>
           )}
+
+          <p className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>
+            2. Margin
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 8 }}>
+            <label className="field" style={{ flex: 1, marginBottom: 0 }}>
+              <span className="field-label">Margin (0–0.999, mis. 0.25 = 25%)</span>
+              <input
+                type="number"
+                step="0.01"
+                value={marginPercent}
+                onChange={(e) => onMarginPercentChange(e.target.value)}
+              />
+            </label>
+            <p className="hint" style={{ margin: 0, whiteSpace: "nowrap" }}>
+              {previewPrice !== null
+                ? `≈ harga jual: ${fmt(Math.round(previewPrice))}`
+                : "isi harga & margin untuk lihat harga jual"}
+            </p>
+          </div>
+
+          <p className="field-label" style={{ marginTop: 10, marginBottom: 6 }}>
+            3. Konfirmasi
+          </p>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, marginBottom: 8 }}>
             <input
               type="checkbox"
@@ -621,6 +653,9 @@ function TradingQuoteManualPanel({
             />
             Harga sudah termasuk ongkir dan biaya impor
           </label>
+          <p className="hint" style={{ marginTop: -4, marginBottom: 8 }}>
+            Tanpa ini, harga tidak bisa dipakai untuk kalkulasi.
+          </p>
           {error && (
             <p className="error-note" role="alert">
               {error}
@@ -746,8 +781,6 @@ export function Workspace(props: {
   const [showPreview, setShowPreview] = useState(false);
   const [showWaText, setShowWaText] = useState(false);
   const [waCopied, setWaCopied] = useState(false);
-  const [showAudit, setShowAudit] = useState(false);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [showExplanation, setShowExplanation] = useState(false);
   const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [adminPanel, setAdminPanel] = useState<"closed" | "void" | "reassign">("closed");
@@ -896,17 +929,35 @@ const CUSTOMER_ADD_NEW = "__add_new__";
           ? form.pitchValue || null
           : (lookups.standardPitchByFamilySize[form.productFamily]?.[form.sizeLabel] ?? null);
       const kind = panel.kind ?? "item";
+      if (form.productFamily === "Custom Part" && !form.description.trim()) {
+        throw new Error("Isi Description untuk Custom Part.");
+      }
+      if (form.productFamily === "Custom Part" && form.customUnitPrice.trim() === "") {
+        throw new Error("Isi Unit Price untuk Custom Part.");
+      }
       if (panel.mode === "add") {
-        await apiPost(`/api/costings/${costing.costingId}/lines`, {
+        const created = await apiPost<{ costingLineId: string; updatedAt: string }>(`/api/costings/${costing.costingId}/lines`, {
           ...formToBody(form, "add", gradeLabel, kind, coatingLabel, pitchForDescription),
           ...(kind === "component" ? { parentLineId: panel.parentLineId } : {}),
         });
+        if (form.productFamily === "Custom Part") {
+          await apiPatch(`/api/costings/${costing.costingId}/lines/${created.costingLineId}`, {
+            expectedUpdatedAt: created.updatedAt,
+            unitPriceOverride: Number(form.customUnitPrice),
+          });
+        }
       } else if (panel.mode === "edit" && panel.lineId) {
         const line = lines.find((l) => l.costingLineId === panel.lineId)!;
-        await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
+        const updated = await apiPatch<{ updatedAt: string }>(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
           expectedUpdatedAt: line.updatedAt,
           ...formToBody(form, "edit", gradeLabel, kind, coatingLabel, pitchForDescription),
         });
+        if (form.productFamily === "Custom Part") {
+          await apiPatch(`/api/costings/${costing.costingId}/lines/${panel.lineId}`, {
+            expectedUpdatedAt: updated.updatedAt,
+            unitPriceOverride: Number(form.customUnitPrice),
+          });
+        }
       }
       setPanel({ mode: "closed" });
       await refreshCosting();
@@ -1090,16 +1141,6 @@ const CUSTOMER_ADD_NEW = "__add_new__";
     }
   }
 
-  async function loadAudit() {
-    try {
-      const data = await apiGet<{ events: AuditEvent[] }>(`/api/costings/${costing.costingId}/audit`);
-      setAuditEvents(data.events);
-      setShowAudit(true);
-    } catch (e) {
-      setError((e as ApiError).message ?? "Gagal memuat audit trail.");
-    }
-  }
-
   const editableStatus = costing.status === "draft" || costing.status === "calculated";
   const isOwner = costing.ownerUserId === props.currentUserId;
 
@@ -1221,8 +1262,10 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               {costing.quotationNo ?? "no quotation no."} {costing.revisionNo > 0 && `· revision #${costing.revisionNo}`}
             </p>
             <PaymentTermsField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
-            <MarkupDisplay costing={costing} />
-            <TotalDiscountField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
+            <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <MarkupDisplay costing={costing} />
+              <TotalDiscountField costing={costing} canEdit={canEdit && editableStatus} onSaved={refreshCosting} />
+            </div>
           </div>
         </div>
         <div className="header-actions">
@@ -1244,14 +1287,9 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             Preview
           </button>
         )}
-        {lines.length > 0 && (
+        {(costing.status === "finalized" || costing.status === "revised") && lines.length > 0 && (
           <button onClick={openWaText} className="btn secondary small">
             Copy as WA Text
-          </button>
-        )}
-        {costing.status !== "finalized" && costing.status !== "revised" && (
-          <button onClick={loadAudit} className="btn secondary small">
-            Audit Trail
           </button>
         )}
         {(costing.status === "finalized" || costing.status === "revised") && (
@@ -1632,14 +1670,27 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               onChange={(e) => setForm({ ...form, productFamily: e.target.value, gradeInput: "", diameterMm: "" })}
             >
               <option value="">-- pilih --</option>
-              {lookups.productFamilies.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
+              {lookups.productFamilies
+                .filter((f) => f !== "Custom Part" || panelKind !== "component")
+                .map((f) => (
+                  <option key={f} value={f}>
+                    {PRODUCT_FAMILY_LABELS[f] ?? f}
+                  </option>
+                ))}
             </select>
           </label>
 
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="field-label">Description</span>
+            <input
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder={form.productFamily === "Custom Part" ? "mis. Stud Bolt A193-B7, M20x150" : undefined}
+            />
+          </label>
+
+          {form.productFamily !== "Custom Part" && (
+          <>
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Grade</span>
             {availableGrades.length > 0 ? (
@@ -1679,11 +1730,6 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               </select>
             </label>
           )}
-
-          <label className="field" style={{ marginBottom: 12 }}>
-            <span className="field-label">Description</span>
-            <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-          </label>
 
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Size / Diameter (mm)</span>
@@ -1739,6 +1785,8 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               </div>
             </label>
           )}
+          </>
+          )}
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Lead time</span>
             <select value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })}>
@@ -1750,6 +1798,8 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               ))}
             </select>
           </label>
+          {form.productFamily !== "Custom Part" && (
+          <>
           <label className="field" style={{ marginBottom: 12 }}>
             <span className="field-label">Pitch / Thread</span>
             <select
@@ -1818,6 +1868,24 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               ))}
             </select>
           </label>
+          </>
+          )}
+
+          {form.productFamily === "Custom Part" && (
+            <label className="field" style={{ marginBottom: 12 }}>
+              <span className="field-label">Unit Price</span>
+              <input
+                type="number"
+                min="0"
+                value={form.customUnitPrice}
+                onChange={(e) => setForm({ ...form, customUnitPrice: e.target.value })}
+                placeholder="Harga jual per unit"
+              />
+              <span className="hint">
+                Custom Part tidak dihitung otomatis — harga ini langsung dipakai sebagai harga jual per unit.
+              </span>
+            </label>
+          )}
 
           {panelKind === "component" ? (
             <label className="field" style={{ marginBottom: 12 }}>
@@ -1853,7 +1921,7 @@ const CUSTOMER_ADD_NEW = "__add_new__";
             </label>
           )}
 
-          {panel.mode === "edit" && panelKind === "item" && editingLine && (
+          {panel.mode === "edit" && panelKind === "item" && editingLine && form.productFamily !== "Custom Part" && (
             <TradingQuoteManualPanel
               line={editingLine}
               costingId={costing.costingId}
@@ -1949,33 +2017,6 @@ const CUSTOMER_ADD_NEW = "__add_new__";
               </button>
             </div>
           </div>
-        </Modal>
-      )}
-
-      {showAudit && (
-        <Modal onClose={() => setShowAudit(false)} width={640} label="Audit Trail">
-          <h2 style={{ marginBottom: 14 }}>Audit Trail</h2>
-          {auditEvents.length === 0 && <p className="empty-state">No events yet.</p>}
-          {auditEvents.map((ev) => (
-            <div key={ev.auditEventId} style={{ borderBottom: "1px solid var(--surface-alt)", padding: "10px 0", fontSize: 13 }}>
-              <div>
-                <strong>{ev.action}</strong>{" "}
-                <span style={{ color: "var(--ink-soft)" }}>
-                  · {ev.entityType} · {new Date(ev.occurredAt).toLocaleString()}
-                </span>
-              </div>
-              <div style={{ color: "var(--ink-soft)" }}>
-                {ev.actorDisplayName ?? "system"} ({ev.actorRole})
-                {ev.reason && <> — {ev.reason}</>}
-              </div>
-              {ev.changedFields && ev.changedFields.length > 0 && (
-                <div style={{ color: "var(--ink-soft)", fontSize: 12 }}>Changed: {ev.changedFields.join(", ")}</div>
-              )}
-            </div>
-          ))}
-          <button onClick={() => setShowAudit(false)} className="btn secondary small" style={{ marginTop: 14 }}>
-            Close
-          </button>
         </Modal>
       )}
 
@@ -2080,13 +2121,19 @@ function PaymentTermsField({
   if (editing) {
     return (
       <p style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-        <input
+        <select
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={accountTerms ?? DEFAULT_PAYMENT_TERMS}
           aria-label="Termin pembayaran khusus quotation ini"
           style={{ minWidth: 240 }}
-        />
+        >
+          <option value="">-- pakai default akun ({accountTerms ?? DEFAULT_PAYMENT_TERMS}) --</option>
+          {PAYMENT_TERMS_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
         <button onClick={save} disabled={busy} className="btn small">
           Simpan
         </button>

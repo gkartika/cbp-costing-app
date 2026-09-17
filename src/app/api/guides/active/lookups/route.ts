@@ -63,7 +63,10 @@ export const GET = apiHandler(async () => {
   // "Stud / Anchor" is hidden pending the coating-coverage gaps found auditing
   // HDG/PTFE (2026-09-10) — the engine and existing Stud/Anchor lines are
   // untouched, this only stops new lines from being started against it.
-  const productFamilies = ["Bolt", "Nut", "Washer"];
+  // "Custom Part" isn't guide data at all — it's the escape hatch for items
+  // the costing engine can't price (stud bolt, flange nut, anchor plate,
+  // etc.), always offered regardless of what the active guide contains.
+  const productFamilies = ["Bolt", "Nut", "Washer", "Custom Part"];
 
   const gradesByFamily: Record<string, string[]> = {};
   // grade -> resolved profile, so the client can filter the Size dropdown to

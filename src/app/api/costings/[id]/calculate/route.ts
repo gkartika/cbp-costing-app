@@ -365,6 +365,40 @@ function applyPitchSurcharge(
 }
 
 /**
+ * "Custom Part" is an escape hatch for items the guide has no idea how to
+ * price (stud bolt, flange nut, anchor plate, etc.) — the user types a
+ * description and enters the unit price directly (stored in
+ * unit_price_override), and this just carries that number through into a
+ * real snapshot so the line participates in Finalize/reporting/etc. like any
+ * other line, without pretending any calculation happened.
+ */
+function priceCustomPartLine(line: CostingLineRow, setQty: number): LineCalcOutcome {
+  const effectiveQty =
+    line.line_kind === "component" ? effectiveComponentQty(line.qty_per_set ?? 1, setQty) : (line.qty ?? 0);
+  if (effectiveQty < 1) throw Errors.qtyInvalid();
+  if (!line.description || !line.description.trim()) throw Errors.validation("Isi Description untuk Custom Part.");
+  if (line.unit_price_override === null) throw Errors.validation("Isi Unit Price untuk Custom Part.");
+
+  const price = Number(line.unit_price_override);
+  return {
+    lineId: line.costing_line_id,
+    priceKind: "PRODUCTION",
+    qty: effectiveQty,
+    profileResolved: null,
+    rawWeightPerItemKg: null,
+    costingWeightPerItemKg: null,
+    basePricePerItem: price,
+    coatingPricePerItem: 0,
+    diesPricePerItem: 0,
+    unitPriceBeforeRounding: price,
+    unitSellingPrice: price,
+    orderTotal: price * effectiveQty,
+    resolvedRuleRefs: [],
+    inputSnapshot: { customPart: true, description: line.description, unitPrice: price },
+  };
+}
+
+/**
  * Prices one line for every price kind that applies to it (the route merge,
  * DEC-2026-09-14): a Production price is always computed; a Trading price is
  * added on top whenever the line's own attributes auto-match exactly one
@@ -378,6 +412,8 @@ async function priceLineOutcomes(
   line: CostingLineRow,
   setQty: number,
 ): Promise<LineCalcOutcome[]> {
+  if (line.product_family === "Custom Part") return [priceCustomPartLine(line, setQty)];
+
   // A component's own qty column is unused: what gets made is qty_per_set
   // times the number of sets ordered, and that is the figure the quantity
   // break and dies amortisation must both see.

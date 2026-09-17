@@ -316,6 +316,27 @@ export function resolveTradingItemById(
 }
 
 /**
+ * A trading_items.grade_or_spec value is sometimes a combined designation
+ * covering more than one equivalent standard as it's written in the guide
+ * spreadsheet (e.g. "F436 / F436M" for one washer pricelist row), while a
+ * costing line only ever carries a single spec — whatever the Grade dropdown
+ * offered (sourced from grade_profile_rules, a different guide table that
+ * isn't guaranteed to use the same combined phrasing). A strict equality
+ * check between the two therefore fails even when the price genuinely
+ * applies, silently producing "no Trading price" for a fully-priced item
+ * (found auditing Washer F436, 2026-09-17). Splitting the guide's value on
+ * "/" and accepting any trimmed, case-insensitive token as a match covers
+ * that without weakening the check into a fuzzy/substring match that could
+ * cross-match unrelated grades.
+ */
+function gradeOrSpecMatches(guideValue: string | null, lineValue: string): boolean {
+  if (guideValue === null) return false;
+  const norm = (s: string) => s.trim().toUpperCase();
+  const target = norm(lineValue);
+  return guideValue.split("/").some((token) => norm(token) === target);
+}
+
+/**
  * Auto-matches a line to a trading pricelist item purely from its own
  * attributes — no user selection involved (route merge, DEC-2026-09-14).
  * Matches on product family + size + grade always; pitch only when the line
@@ -343,8 +364,13 @@ export function resolveTradingItemByAttributes(
     pitchValue: string | null;
   },
 ): { tradingItemId: string; ref: ResolvedRuleRef } | null {
+  // No grade at all can never match anything below — same outcome as before
+  // (an exact-equality compare against null never matched a real grade either).
+  if (params.gradeOrSpec === null) return null;
+  const lineGradeOrSpec: string = params.gradeOrSpec;
+
   const routeRule = ctx.costingRouteRules.find(
-    (r) => r.productFamily === params.productFamily && r.gradeOrSpec === params.gradeOrSpec,
+    (r) => r.productFamily === params.productFamily && gradeOrSpecMatches(r.gradeOrSpec, lineGradeOrSpec),
   );
   if (routeRule && routeRule.allowedCostingRoute === "Custom Production") return null;
 
@@ -352,7 +378,7 @@ export function resolveTradingItemByAttributes(
     (t) =>
       t.productCategory === params.productFamily &&
       t.sizeLabel === params.sizeLabel &&
-      t.gradeOrSpec === params.gradeOrSpec &&
+      gradeOrSpecMatches(t.gradeOrSpec, lineGradeOrSpec) &&
       (params.pitchType !== "CUSTOM" || t.pitch === params.pitchValue),
   );
   if (candidates.length !== 1) return null;
